@@ -22,6 +22,7 @@
       --bl: #61afef;
       --gr: #98c379;
       --dm: #a6a6a6;
+      --hdr: #1a1f2b;
     }
 
     html, body {
@@ -33,13 +34,44 @@
       line-height: 1.6;
       overflow: hidden;
       -webkit-text-size-adjust: 100%;
+      position: fixed;
+      width: 100%;
+      top: 0;
+      left: 0;
     }
 
     #app {
       display: flex;
       flex-direction: column;
       height: 100%; height: 100dvh;
+      position: fixed;
+      width: 100%;
+      top: 0;
+      left: 0;
     }
+
+    /* ── Header bar ── */
+    #hdr {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      padding-top: env(safe-area-inset-top, 0px);
+      height: calc(32px + env(safe-area-inset-top, 0px));
+      background: var(--hdr);
+      border-bottom: 1px solid #2a3040;
+      flex-shrink: 0;
+      font-size: 11px;
+      user-select: none;
+      min-height: calc(32px + env(safe-area-inset-top, 0px));
+    }
+    #hdr.visible { display: flex; }
+    #hdr-room { color: var(--cy); font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #hdr-enc { margin-left: auto; font-size: 10px; flex-shrink: 0; }
+    #hdr-enc.on  { color: var(--gr); }
+    #hdr-enc.off { color: var(--dm); }
+    #hdr-users { color: var(--dm); font-size: 10px; flex-shrink: 0; }
+    #hdr-reconn { color: var(--yl); font-size: 10px; flex-shrink: 0; display: none; }
 
     #out {
       flex: 1;
@@ -49,6 +81,22 @@
       word-break: break-word;
       -webkit-overflow-scrolling: touch;
     }
+
+    /* ── Update banner ── */
+    #update-bar {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 8px 14px;
+      background: #2a3a20;
+      color: var(--gr);
+      font-size: 11px;
+      cursor: pointer;
+      flex-shrink: 0;
+      user-select: none;
+    }
+    #update-bar.visible { display: flex; }
 
     .ln { display: block; min-height: 1.6em; }
 
@@ -72,11 +120,10 @@
       outline: none;
       color: var(--fg);
       font-family: inherit;
-      font-size: inherit;
+      font-size: 16px;
       line-height: inherit;
       caret-color: var(--cy);
       min-width: 0;
-      font-size: 16px;
     }
 
     /* color classes */
@@ -94,6 +141,9 @@
     .hyg { background: #003a00; padding: 0 2px; border-radius: 2px; }
     .hyb { background: #003040; padding: 0 2px; border-radius: 2px; }
 
+    /* mention highlight */
+    .mention { background: #3a3000; padding: 0 2px; border-radius: 2px; color: var(--yl); font-weight: bold; }
+
     /* markdown */
     .st { text-decoration: line-through; }
     .ul { text-decoration: underline; }
@@ -101,6 +151,13 @@
 </head>
 <body>
 <div id="app">
+  <div id="hdr">
+    <span id="hdr-room"></span>
+    <span id="hdr-reconn">⟳ reconnecting...</span>
+    <span id="hdr-users"></span>
+    <span id="hdr-enc"></span>
+  </div>
+  <div id="update-bar" onclick="location.reload()">⟳ Update available — tap to reload</div>
   <div id="out"></div>
   <div id="bar">
     <span id="pr">›</span>
@@ -114,16 +171,38 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.0.8';
-const DATE    = '17.03.2026';
+const VER     = '0.1.0';
+const DATE    = '18.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
 const K_NICK  = 'hc_nick';
 const NC      = ['cy','yl','mg','rd','bl','gr'];
 
+// Native hack.chat commands — always sent as plaintext, bypass encryption
+const NATIVE_CMDS = new Set([
+  '/whisper', '/w', '/reply', '/r',
+  '/me',
+  '/nick',
+  '/move',
+  '/ignore', '/unignore',
+  '/invite',
+  '/stats',
+  '/ban', '/unban', '/kick', '/dumb', '/speak',
+  '/mute', '/unmute',
+  '/color',
+  '/lock', '/unlock',
+  '/enablecaptcha', '/disablecaptcha',
+]);
+
 // ── DOM ───────────────────────────────────────────────────────────────────────
-const $out = document.getElementById('out');
-const $inp = document.getElementById('inp');
+const $out       = document.getElementById('out');
+const $inp       = document.getElementById('inp');
+const $hdr       = document.getElementById('hdr');
+const $hdrRoom   = document.getElementById('hdr-room');
+const $hdrEnc    = document.getElementById('hdr-enc');
+const $hdrUsers  = document.getElementById('hdr-users');
+const $hdrReconn = document.getElementById('hdr-reconn');
+const $updateBar = document.getElementById('update-bar');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let mode         = 'setup';  // 'setup' | 'chat'
@@ -135,6 +214,11 @@ let encOn        = false;
 let users        = new Set();
 let curRoom      = '';
 let curNick      = '';
+let curServer    = '';
+let curFullNick  = '';       // nick#password for reconnect
+let reconnecting = false;
+let reconnTimer  = null;
+let reconnCount  = 0;
 
 // ── Output ────────────────────────────────────────────────────────────────────
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -157,6 +241,33 @@ function ts() {
   return `<span class="dm">[${h}:${m}]</span>`;
 }
 
+// ── Header ────────────────────────────────────────────────────────────────────
+function showHeader() {
+  const short = curRoom.length > 20 ? curRoom.slice(0,20) + '…' : curRoom;
+  $hdrRoom.textContent = '?' + short;
+  updateEncIcon();
+  updateUsersCount();
+  $hdr.classList.add('visible');
+}
+
+function hideHeader() {
+  $hdr.classList.remove('visible');
+}
+
+function updateEncIcon() {
+  if (encOn && baseKey) {
+    $hdrEnc.textContent = '🔒 ENC';
+    $hdrEnc.className = 'on';
+  } else {
+    $hdrEnc.textContent = '🔓 OFF';
+    $hdrEnc.className = 'off';
+  }
+}
+
+function updateUsersCount() {
+  $hdrUsers.textContent = `👤 ${users.size}`;
+}
+
 // ── Input ─────────────────────────────────────────────────────────────────────
 const waitInput = () => new Promise(r => { resolveInput = r; });
 
@@ -166,7 +277,6 @@ $inp.addEventListener('keydown', e => {
   $inp.value = '';
 
   if (mode === 'setup') {
-    ln(`<span class="dm">  ${esc(v)}</span>`);
     const fn = resolveInput;
     resolveInput = null;
     fn?.(v);
@@ -248,6 +358,13 @@ async function decMsg(text) {
 // ── Markdown ──────────────────────────────────────────────────────────────────
 function md(s) {
   s = esc(s);
+  // @mentions — highlight if it's our nick
+  s = s.replace(/@(\w+)/g, (m, nick) => {
+    if (nick.toLowerCase() === curNick.toLowerCase()) {
+      return `<span class="mention">@${nick}</span>`;
+    }
+    return `<span class="cy">@${nick}</span>`;
+  });
   s = s.replace(/`(.+?)`/g,             '<span class="dm cy">$1</span>');
   s = s.replace(/\*\*\*(.+?)\*\*\*/g,   '<strong><em>$1</em></strong>');
   s = s.replace(/\*\*(.+?)\*\*/g,       '<strong>$1</strong>');
@@ -277,9 +394,14 @@ async function askNotif() {
     notifOK = (await Notification.requestPermission()) === 'granted';
   }
 }
-function notify(who, room) {
-  if (document.hasFocus()) return;
-  if (notifOK) new Notification('hc', { body: `${who} in ?${room.slice(0,12)}`, silent: true });
+function notify(who, room, isMention) {
+  if (document.hasFocus() && !isMention) return;
+  if (notifOK) {
+    const body = isMention
+      ? `${who} mentioned you in ?${room.slice(0,12)}`
+      : `${who} in ?${room.slice(0,12)}`;
+    new Notification('hc', { body, silent: false });
+  }
 }
 
 // ── Print screens ─────────────────────────────────────────────────────────────
@@ -337,13 +459,20 @@ function readme() {
   ln(`    <span class="cy">/clear</span>    clear screen`);
   ln(`    <span class="cy">/room</span>     show room info`);
   ln(`    <span class="cy">/who</span>      list online users`);
+  ln(`    <span class="cy">/dm @nick msg</span>  whisper (alias for /whisper)`);
+  ln(`    <span class="cy">/me action</span>     emote action`);
   ln(`    <span class="cy">/format</span>   markdown cheat sheet`);
   ln(`    <span class="cy">/readme</span>   this guide`);
   ln(`    <span class="cy">/help</span>     command list`);
   ln();
+  ln(`  <strong>NATIVE SERVER COMMANDS</strong>`);
+  ln(`    <span class="dm">/whisper /nick /move /ignore /unignore</span>`);
+  ln(`    <span class="dm">Sent as plaintext even with encryption on</span>`);
+  ln();
   ln(`  <strong>TIPS</strong>`);
   ln(`    Same phrase = same room, on any device`);
   ln(`    Tripcode proves identity without registration`);
+  ln(`    Mention someone: <span class="cy">@nick</span> in your message`);
   ln(`    Works on iOS, Android, desktop browsers`);
   ln(`    Install: "Add to Home Screen" in your browser`);
   ln();
@@ -365,10 +494,28 @@ function showHelp() {
   ln();
   ln(`  <span class="cy">/enc</span>    toggle encryption   <span class="cy">/clear</span>   clear screen`);
   ln(`  <span class="cy">/room</span>   room info           <span class="cy">/who</span>     online users`);
+  ln(`  <span class="cy">/dm</span>     whisper to user     <span class="cy">/me</span>      emote action`);
   ln(`  <span class="cy">/format</span> markdown help       <span class="cy">/readme</span>  full guide`);
   ln(`  <span class="cy">/quit</span>   back to start       <span class="cy">/exit</span>    reload app`);
   ln(`  <span class="cy">/nuke</span>   wipe all data &amp; reload`);
   ln();
+}
+
+// ── Validation helpers ────────────────────────────────────────────────────────
+function isValidWsUrl(s) {
+  try {
+    const u = new URL(s);
+    return u.protocol === 'wss:' || u.protocol === 'ws:';
+  } catch { return false; }
+}
+
+function isValidNick(s) {
+  const name = s.split('#')[0];
+  return name.length >= 1 && name.length <= 24 && /^[a-zA-Z0-9_]+$/.test(name);
+}
+
+function isValidRoom(s) {
+  return s.length >= 1 && s.length <= 120;
 }
 
 // ── Setup screens ─────────────────────────────────────────────────────────────
@@ -383,13 +530,37 @@ async function setupServer() {
       ln(`  <span class="dm">Reset to hack.chat.</span>`);
       return DEF_SRV;
     }
-    if (v.endsWith(' /s')) { const s = v.slice(0,-3).trim(); localStorage.setItem(K_SRV,s); return s; }
+    if (v.endsWith(' /s')) {
+      const s = v.slice(0,-3).trim();
+      if (!isValidWsUrl(s)) {
+        ln(`  <span class="rd">! Invalid URL. Must start with wss:// or ws://</span>`);
+        return await setupServer();
+      }
+      localStorage.setItem(K_SRV, s);
+      return s;
+    }
+    if (v && !isValidWsUrl(v)) {
+      ln(`  <span class="rd">! Invalid URL. Must start with wss:// or ws://</span>`);
+      return await setupServer();
+    }
     return v || saved;
   } else {
     ln(`  Custom server?`);
     ln(`  <span class="cy">[Enter]</span> hack.chat  <span class="cy">[url /s]</span> save new`);
     const v = (await waitInput()).trim();
-    if (v.endsWith(' /s')) { const s = v.slice(0,-3).trim(); localStorage.setItem(K_SRV,s); return s; }
+    if (v.endsWith(' /s')) {
+      const s = v.slice(0,-3).trim();
+      if (!isValidWsUrl(s)) {
+        ln(`  <span class="rd">! Invalid URL. Must start with wss:// or ws://</span>`);
+        return await setupServer();
+      }
+      localStorage.setItem(K_SRV, s);
+      return s;
+    }
+    if (v && !isValidWsUrl(v)) {
+      ln(`  <span class="rd">! Invalid URL. Must start with wss:// or ws://</span>`);
+      return await setupServer();
+    }
     return v || DEF_SRV;
   }
 }
@@ -407,7 +578,12 @@ async function setupRoom() {
     return h;
   } else {
     ln(`  Room name`);
-    const r = (await waitInput()).trim();
+    let r;
+    while (true) {
+      r = (await waitInput()).trim();
+      if (isValidRoom(r)) break;
+      ln(`  <span class="rd">! Room name cannot be empty.</span>`);
+    }
     baseKey = null; encOn = false;
     return r;
   }
@@ -423,20 +599,48 @@ async function setupNick() {
     if (v === '/r') {
       localStorage.removeItem(K_NICK);
       ln(`  <span class="dm">Forgot saved nick.</span>`);
-      ln();
-      ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save`);
-      const n = (await waitInput()).trim();
-      if (n.endsWith(' /s')) { const nick=n.slice(0,-3).trim(); localStorage.setItem(K_NICK,nick); return nick; }
-      return n;
+      return await askNick();
     }
-    if (v.endsWith(' /s')) { const nick=v.slice(0,-3).trim(); localStorage.setItem(K_NICK,nick); return nick; }
-    return v || saved;
+    if (v.endsWith(' /s')) {
+      const nick = v.slice(0,-3).trim();
+      if (!isValidNick(nick)) {
+        ln(`  <span class="rd">! Nick: 1-24 chars, a-z 0-9 _ only (before #).</span>`);
+        return await setupNick();
+      }
+      localStorage.setItem(K_NICK, nick);
+      return nick;
+    }
+    if (v) {
+      if (!isValidNick(v)) {
+        ln(`  <span class="rd">! Nick: 1-24 chars, a-z 0-9 _ only (before #).</span>`);
+        return await setupNick();
+      }
+      return v;
+    }
+    return saved;
   } else {
-    ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save`);
-    const v = (await waitInput()).trim();
-    if (v.endsWith(' /s')) { const nick=v.slice(0,-3).trim(); localStorage.setItem(K_NICK,nick); return nick; }
-    return v;
+    return await askNick();
   }
+}
+
+async function askNick() {
+  ln();
+  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save`);
+  const v = (await waitInput()).trim();
+  if (v.endsWith(' /s')) {
+    const nick = v.slice(0,-3).trim();
+    if (!isValidNick(nick)) {
+      ln(`  <span class="rd">! Nick: 1-24 chars, a-z 0-9 _ only (before #).</span>`);
+      return await askNick();
+    }
+    localStorage.setItem(K_NICK, nick);
+    return nick;
+  }
+  if (!v || !isValidNick(v)) {
+    ln(`  <span class="rd">! Nick: 1-24 chars, a-z 0-9 _ only (before #).</span>`);
+    return await askNick();
+  }
+  return v;
 }
 
 // ── Nuke ──────────────────────────────────────────────────────────────────────
@@ -457,6 +661,12 @@ async function nuke() {
   return false;
 }
 
+// ── Check if a command is native (bypass encryption) ──────────────────────────
+function isNativeCmd(text) {
+  const cmd = text.split(/\s/)[0].toLowerCase();
+  return NATIVE_CMDS.has(cmd);
+}
+
 // ── Chat command handler ───────────────────────────────────────────────────────
 async function handleChat(text) {
   const s = text.trim();
@@ -464,20 +674,25 @@ async function handleChat(text) {
 
   if (s === '/exit') {
     ln(`  <span class="dm">Bye!</span>`);
+    cancelReconnect();
     ws?.close(); ws = null;
+    hideHeader();
     resolveChat?.('exit'); resolveChat = null;
     return;
   }
   if (s === '/quit' || s === '/restart') {
+    cancelReconnect();
     ws?.close(); ws = null;
+    hideHeader();
     mode = 'setup';
     resolveChat?.('quit'); resolveChat = null;
     return;
   }
   if (s === '/nuke') {
     mode = 'setup';
+    hideHeader();
     const ok = await nuke();
-    if (!ok) mode = 'chat';
+    if (!ok) { mode = 'chat'; showHeader(); }
     return;
   }
   if (s === '/clear')  { $out.innerHTML = ''; return; }
@@ -493,23 +708,143 @@ async function handleChat(text) {
     } else {
       encOn = !encOn;
       ln(`  Encryption: ${encOn ? '<span class="gr">ON</span>' : '<span class="yl">OFF</span>'}`);
+      updateEncIcon();
     }
     return;
   }
 
-  // Send message
+  // /dm @nick msg → /whisper nick msg (client alias)
+  const dmMatch = s.match(/^\/dm\s+@?(\S+)\s+([\s\S]+)$/i);
+  if (dmMatch) {
+    const payload = `/whisper ${dmMatch[1]} ${dmMatch[2]}`;
+    ws?.send(JSON.stringify({ cmd:'chat', text: payload }));
+    ln(`${ts()} <span class="mg">→ whisper to ${esc(dmMatch[1])}</span>: ${md(dmMatch[2])}`);
+    return;
+  }
+
+  // Native server commands — always plaintext
+  if (s.startsWith('/') && isNativeCmd(s)) {
+    ws?.send(JSON.stringify({ cmd:'chat', text: s }));
+    return;
+  }
+
+  // Regular message — encrypt if enabled
   let payload = text;
   if (encOn && baseKey) payload = await encMsg(text);
   ws?.send(JSON.stringify({ cmd:'chat', text: payload }));
 }
 
+// ── Reconnect logic ───────────────────────────────────────────────────────────
+function cancelReconnect() {
+  if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+  reconnecting = false;
+  reconnCount = 0;
+  $hdrReconn.style.display = 'none';
+}
+
+function scheduleReconnect() {
+  if (mode !== 'chat' || reconnecting) return;
+  reconnecting = true;
+  reconnCount++;
+  // Exponential backoff: 1s, 2s, 4s, 8s, max 15s
+  const delay = Math.min(1000 * Math.pow(2, reconnCount - 1), 15000);
+  $hdrReconn.style.display = '';
+  ln(`${ts()} <span class="yl">⟳ Reconnecting in ${(delay/1000).toFixed(0)}s...</span>`);
+
+  reconnTimer = setTimeout(() => {
+    reconnTimer = null;
+    doReconnect();
+  }, delay);
+}
+
+function doReconnect() {
+  if (mode !== 'chat') { cancelReconnect(); return; }
+
+  ws?.close();
+  ws = new WebSocket(curServer);
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ cmd:'join', channel: curRoom, nick: curFullNick }));
+    reconnecting = false;
+    reconnCount = 0;
+    $hdrReconn.style.display = 'none';
+    ln(`${ts()} <span class="gr">✓ Reconnected</span>`);
+  };
+
+  ws.onerror = () => {
+    ln(`${ts()} <span class="rd">! Reconnect error</span>`);
+  };
+
+  ws.onclose = () => {
+    if (mode === 'chat') scheduleReconnect();
+  };
+
+  ws.onmessage = handleWsMessage;
+}
+
+// ── WebSocket message handler (shared between connect and reconnect) ──────────
+async function handleWsMessage({ data }) {
+  const d   = JSON.parse(data);
+  const cmd = d.cmd;
+
+  if (cmd === 'chat') {
+    const who = d.nick || '';
+    let rawText = d.text || '';
+    let text = rawText;
+    let isMention = false;
+
+    if (text.startsWith('enc:')) {
+      if (baseKey && encOn) {
+        const pt = await decMsg(text);
+        if (pt !== null) {
+          text = md(pt);
+          isMention = pt.toLowerCase().includes('@' + curNick.toLowerCase());
+        } else {
+          text = `<span class="dm">[encrypted — wrong key or period]</span>`;
+        }
+      } else {
+        text = `<span class="dm">[encrypted]</span>`;
+      }
+    } else {
+      isMention = rawText.toLowerCase().includes('@' + curNick.toLowerCase());
+      text = md(text);
+    }
+
+    const trip = d.trip ? ` <span class="dm">(${esc(d.trip)})</span>` : '';
+    ln(`${ts()} <span class="${nickCls(who)}"><strong>${esc(who)}</strong></span>${trip}: ${text}`);
+    if (who !== curNick) notify(who, curRoom, isMention);
+  }
+  else if (cmd === 'onlineSet') {
+    users = new Set(d.nicks || []);
+    ln(`${ts()} <span class="dm">Online: ${(d.nicks||[]).map(esc).join(', ')}</span>`);
+    updateUsersCount();
+  }
+  else if (cmd === 'onlineAdd') {
+    users.add(d.nick);
+    ln(`${ts()} <span class="yl">+ ${esc(d.nick)} joined</span>`);
+    updateUsersCount();
+  }
+  else if (cmd === 'onlineRemove') {
+    users.delete(d.nick);
+    ln(`${ts()} <span class="dm">- ${esc(d.nick)} left</span>`);
+    updateUsersCount();
+  }
+  else if (cmd === 'info') { ln(`${ts()} <span class="dm">i: ${esc(d.text||'')}</span>`); }
+  else if (cmd === 'warn') { ln(`${ts()} <span class="rd">! ${esc(d.text||'')}</span>`); }
+}
+
 // ── Connect ───────────────────────────────────────────────────────────────────
 function connectChat(server, room, nick) {
-  curRoom = room;
-  curNick = nick.split('#')[0];
-  users   = new Set();
+  curRoom     = room;
+  curNick     = nick.split('#')[0];
+  curServer   = server;
+  curFullNick = nick;
+  users       = new Set();
 
   const short = room.length > 16 ? room.slice(0,16) + '…' : room;
+
+  // Set page title to room name
+  document.title = `hc — ?${short}`;
 
   return new Promise(resolve => {
     resolveChat = resolve;
@@ -527,6 +862,7 @@ function connectChat(server, room, nick) {
       ln(`  <span class="dm">/help for commands</span>`);
       ln();
       mode = 'chat';
+      showHeader();
       $inp.focus();
       askNotif();
     };
@@ -536,49 +872,30 @@ function connectChat(server, room, nick) {
     };
 
     ws.onclose = () => {
-      if (resolveChat) { resolveChat('disconnected'); resolveChat = null; }
+      if (mode === 'chat' && resolveChat) {
+        // Don't resolve — try to reconnect
+        scheduleReconnect();
+      } else if (resolveChat) {
+        resolveChat('disconnected');
+        resolveChat = null;
+      }
     };
 
-    ws.onmessage = async ({ data }) => {
-      const d   = JSON.parse(data);
-      const cmd = d.cmd;
-
-      if (cmd === 'chat') {
-        const who = d.nick || '';
-        let text  = d.text || '';
-
-        if (text.startsWith('enc:')) {
-          if (baseKey && encOn) {
-            const pt = await decMsg(text);
-            text = pt !== null ? md(pt) : `<span class="dm">[encrypted — wrong key or period]</span>`;
-          } else {
-            text = `<span class="dm">[encrypted]</span>`;
-          }
-        } else {
-          text = md(text);
-        }
-
-        const trip = d.trip ? ` <span class="dm">(${esc(d.trip)})</span>` : '';
-        ln(`${ts()} <span class="${nickCls(who)}"><strong>${esc(who)}</strong></span>${trip}: ${text}`);
-        if (who !== curNick) notify(who, curRoom);
-      }
-      else if (cmd === 'onlineSet') {
-        (d.nicks||[]).forEach(n => users.add(n));
-        ln(`${ts()} <span class="dm">Online: ${(d.nicks||[]).map(esc).join(', ')}</span>`);
-      }
-      else if (cmd === 'onlineAdd') {
-        users.add(d.nick);
-        ln(`${ts()} <span class="yl">+ ${esc(d.nick)} joined</span>`);
-      }
-      else if (cmd === 'onlineRemove') {
-        users.delete(d.nick);
-        ln(`${ts()} <span class="dm">- ${esc(d.nick)} left</span>`);
-      }
-      else if (cmd === 'info') { ln(`${ts()} <span class="dm">i: ${esc(d.text||'')}</span>`); }
-      else if (cmd === 'warn') { ln(`${ts()} <span class="rd">! ${esc(d.text||'')}</span>`); }
-    };
+    ws.onmessage = handleWsMessage;
   });
 }
+
+// ── Visibility change: reconnect when returning from background ───────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && mode === 'chat') {
+    // Check if WebSocket is dead
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      cancelReconnect();
+      reconnCount = 0;
+      scheduleReconnect();
+    }
+  }
+});
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 async function main() {
@@ -587,6 +904,10 @@ async function main() {
   while (true) {
     $out.innerHTML = '';
     mode = 'setup';
+    hideHeader();
+
+    // Reset title
+    document.title = 'hc — hack.chat';
 
     if (first) {
       banner();
@@ -621,25 +942,78 @@ async function main() {
     }
 
     // 'quit' or 'disconnected' → loop back to setup
+    cancelReconnect();
+    hideHeader();
     ln();
     ln(`  <span class="dm">Back to start...</span>`);
     await new Promise(r => setTimeout(r, 600));
   }
 }
 
-// ── Service Worker ────────────────────────────────────────────────────────────
+// ── Service Worker + PWA update ───────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => {});
+    navigator.serviceWorker.register('./sw.js').then(reg => {
+      // Check for updates periodically
+      setInterval(() => reg.update(), 60 * 1000);
+
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'activated' && navigator.serviceWorker.controller) {
+            // New version available
+            $updateBar.classList.add('visible');
+          }
+        });
+      });
+    }).catch(() => {});
+
+    // Also detect controller change (another tab activated new SW)
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      $updateBar.classList.add('visible');
+    });
   });
 }
 
-if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', () => {
-    document.getElementById('app').style.height = window.visualViewport.height + 'px';
+// ── iOS keyboard / viewport fix ───────────────────────────────────────────────
+(function() {
+  const $app = document.getElementById('app');
+
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+
+    function onViewportResize() {
+      // Set app height to visual viewport (excludes keyboard)
+      $app.style.height = vv.height + 'px';
+      // Compensate for any offset (iOS scrolls the page up)
+      $app.style.top = vv.offsetTop + 'px';
+      // Force scroll to bottom of output when keyboard appears
+      requestAnimationFrame(() => {
+        $out.scrollTop = $out.scrollHeight;
+      });
+    }
+
+    vv.addEventListener('resize', onViewportResize);
+    vv.addEventListener('scroll', () => {
+      // Prevent iOS from scrolling the fixed layout
+      $app.style.top = vv.offsetTop + 'px';
+    });
+  }
+
+  // Prevent body scroll on iOS
+  document.body.addEventListener('touchmove', e => {
+    if (e.target === document.body) e.preventDefault();
+  }, { passive: false });
+
+  // When input focused, scroll output to bottom
+  $inp.addEventListener('focus', () => {
+    setTimeout(() => {
+      $out.scrollTop = $out.scrollHeight;
+    }, 300);
   });
-}
-  
+})();
+
 main().catch(console.error);
 </script>
 </body>
