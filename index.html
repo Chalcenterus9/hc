@@ -76,7 +76,7 @@
     #out {
       flex: 1;
       overflow-y: auto;
-      ppadding: calc(24px + env(safe-area-inset-top, 0px)) 14px 4px;
+      padding: calc(24px + env(safe-area-inset-top, 0px)) 14px 4px;
       white-space: pre-wrap;
       word-break: break-word;
       -webkit-overflow-scrolling: touch;
@@ -248,11 +248,13 @@ function showHeader() {
   updateEncIcon();
   updateUsersCount();
   $hdr.classList.add('visible');
+  // Header handles safe-area, so #out doesn't need it
   $out.style.paddingTop = '24px';
 }
 
 function hideHeader() {
   $hdr.classList.remove('visible');
+  // Restore safe-area padding when header is gone
   $out.style.paddingTop = '';
 }
 
@@ -855,6 +857,8 @@ function connectChat(server, room, nick) {
       ln();
       mode = 'chat';
       showHeader();
+      // Force scroll to bottom so user sees the chat
+      requestAnimationFrame(() => { $out.scrollTop = $out.scrollHeight; });
       $inp.focus();
       askNotif();
     };
