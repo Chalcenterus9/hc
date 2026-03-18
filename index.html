@@ -69,7 +69,7 @@
     #hdr-room { color: var(--cy); font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #hdr-enc { margin-left: auto; font-size: 10px; flex-shrink: 0; }
     #hdr-enc.on  { color: var(--gr); }
-    #hdr-enc.off { color: var(--dm); }
+    #hdr-enc.off { color: var(--rd); }
     #hdr-users { color: var(--dm); font-size: 10px; flex-shrink: 0; }
     #hdr-reconn { color: var(--yl); font-size: 10px; flex-shrink: 0; display: none; }
 
@@ -256,16 +256,16 @@ function hideHeader() {
 
 function updateEncIcon() {
   if (encOn && baseKey) {
-    $hdrEnc.textContent = '🔒 ENC';
+    $hdrEnc.innerHTML = 'enc <span class="gr">[ON]</span>';
     $hdrEnc.className = 'on';
   } else {
-    $hdrEnc.textContent = '🔓 OFF';
+    $hdrEnc.innerHTML = 'enc <span class="rd">[OFF]</span>';
     $hdrEnc.className = 'off';
   }
 }
 
 function updateUsersCount() {
-  $hdrUsers.textContent = `👤 ${users.size}`;
+  $hdrUsers.textContent = `[${users.size}]`;
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
@@ -453,8 +453,7 @@ function readme() {
   ln();
   ln(`  <strong>COMMANDS</strong>`);
   ln(`    <span class="cy">/enc</span>      toggle encryption on/off`);
-  ln(`    <span class="cy">/quit</span>     back to start`);
-  ln(`    <span class="cy">/exit</span>     reload app`);
+  ln(`    <span class="cy">/quit</span>     disconnect &amp; back to start (alias: /exit)`);
   ln(`    <span class="cy">/nuke</span>     wipe all saved data &amp; reload`);
   ln(`    <span class="cy">/clear</span>    clear screen`);
   ln(`    <span class="cy">/room</span>     show room info`);
@@ -496,8 +495,7 @@ function showHelp() {
   ln(`  <span class="cy">/room</span>   room info           <span class="cy">/who</span>     online users`);
   ln(`  <span class="cy">/dm</span>     whisper to user     <span class="cy">/me</span>      emote action`);
   ln(`  <span class="cy">/format</span> markdown help       <span class="cy">/readme</span>  full guide`);
-  ln(`  <span class="cy">/quit</span>   back to start       <span class="cy">/exit</span>    reload app`);
-  ln(`  <span class="cy">/nuke</span>   wipe all data &amp; reload`);
+  ln(`  <span class="cy">/quit</span>   back to start       <span class="cy">/nuke</span>    wipe all data`);
   ln();
 }
 
@@ -672,15 +670,7 @@ async function handleChat(text) {
   const s = text.trim();
   if (!s) return;
 
-  if (s === '/exit') {
-    ln(`  <span class="dm">Bye!</span>`);
-    cancelReconnect();
-    ws?.close(); ws = null;
-    hideHeader();
-    resolveChat?.('exit'); resolveChat = null;
-    return;
-  }
-  if (s === '/quit' || s === '/restart') {
+  if (s === '/exit' || s === '/quit' || s === '/restart') {
     cancelReconnect();
     ws?.close(); ws = null;
     hideHeader();
@@ -936,12 +926,7 @@ async function main() {
 
     const reason = await connectChat(server, room, nick);
 
-    if (reason === 'exit') {
-      setTimeout(() => location.reload(), 300);
-      break;
-    }
-
-    // 'quit' or 'disconnected' → loop back to setup
+    // quit or disconnected → loop back to setup
     cancelReconnect();
     hideHeader();
     ln();
