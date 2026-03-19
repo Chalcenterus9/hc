@@ -259,6 +259,13 @@ const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;
 // ── Typewriter engine ─────────────────────────────────────────────────────────
 const typeQueue = [];
 let typing = false;
+let typeTimer = null;
+
+function flushType() {
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+  typeQueue.length = 0;
+  typing = false;
+}
 
 function print(html, typed = false) {
   const atBottom = $out.scrollTop + $out.clientHeight >= $out.scrollHeight - 10;
@@ -316,6 +323,7 @@ function processTypeQueue() {
   const timer = setInterval(() => {
     if (i >= chars.length) {
       clearInterval(timer);
+      typeTimer = null;
       processTypeQueue();
       return;
     }
@@ -327,9 +335,10 @@ function processTypeQueue() {
     const atBot = $out.scrollTop + $out.clientHeight >= $out.scrollHeight - 10;
     if (atBot) $out.scrollTop = $out.scrollHeight;
   }, interval);
+  typeTimer = timer;
 }
 
-const ln = (h = '', typed = false) => print(h + '\n', typed);
+const ln = (h = '', typed = true) => print(h + '\n', typed);
 
 function ts() {
   const n = new Date();
@@ -719,19 +728,19 @@ function notify(who, room, isMention) {
 
 // ── Print screens ─────────────────────────────────────────────────────────────
 function banner() {
-  ln();
-  ln(`<span class="cy"> /\$\$                                        </span>`);
-  ln(`<span class="cy">| \$\$                                        </span>`);
-  ln(`<span class="cy">| \$\$\$\$\$\$\$   /\$\$\$\$\$\$\$      /\$\$\$\$\$\$  /\$\$   /\$\$</span>`);
-  ln(`<span class="cy">| \$\$__  \$\$ /\$\$_____/     /\$\$__  \$\$| \$\$  | \$\$</span>`);
-  ln(`<span class="cy">| \$\$  \ \$\$| \$\$          | \$\$  \ \$\$| \$\$  | \$\$</span>`);
-  ln(`<span class="cy">| \$\$  | \$\$| \$\$          | \$\$  | \$\$| \$\$  | \$\$</span>`);
-  ln(`<span class="cy">| \$\$  | \$\$|  \$\$\$\$\$\$\$ /\$\$| \$\$\$\$\$\$\$/|  \$\$\$\$\$\$\$</span>`);
-  ln(`<span class="cy">|__/  |__/ \_______/|__/| \$\$____/  \____  \$\$</span>`);
-  ln(`<span class="cy">                        | \$\$       /\$\$  | \$\$</span>`);
-  ln(`<span class="cy">                        | \$\$      |  \$\$\$\$\$\$/</span>`);
-  ln(`<span class="cy">                        |__/       \______/ </span>`);
-  ln();
+  ln('', false);
+  ln(`<span class="cy"> /\$\$                                        </span>`, false);
+  ln(`<span class="cy">| \$\$                                        </span>`, false);
+  ln(`<span class="cy">| \$\$\$\$\$\$\$   /\$\$\$\$\$\$\$      /\$\$\$\$\$\$  /\$\$   /\$\$</span>`, false);
+  ln(`<span class="cy">| \$\$__  \$\$ /\$\$_____/     /\$\$__  \$\$| \$\$  | \$\$</span>`, false);
+  ln(`<span class="cy">| \$\$  \ \$\$| \$\$          | \$\$  \ \$\$| \$\$  | \$\$</span>`, false);
+  ln(`<span class="cy">| \$\$  | \$\$| \$\$          | \$\$  | \$\$| \$\$  | \$\$</span>`, false);
+  ln(`<span class="cy">| \$\$  | \$\$|  \$\$\$\$\$\$\$ /\$\$| \$\$\$\$\$\$\$/|  \$\$\$\$\$\$\$</span>`, false);
+  ln(`<span class="cy">|__/  |__/ \_______/|__/| \$\$____/  \____  \$\$</span>`, false);
+  ln(`<span class="cy">                        | \$\$       /\$\$  | \$\$</span>`, false);
+  ln(`<span class="cy">                        | \$\$      |  \$\$\$\$\$\$/</span>`, false);
+  ln(`<span class="cy">                        |__/       \______/ </span>`, false);
+  ln('', false);
   ln(`  <span class="dm">v${VER} · ${DATE} · tiny hack.chat client</span>`);
   ln(`  <span class="dm">by </span><strong>Chalcenterus9</strong><span class="dm"> & </span><strong>Claude AI</strong><span class="dm">  ·  MIT License</span>`);
   ln(`  <span class="dm">E2E encryption · SHA-256 rooms · markdown · self-hosted</span>`);
@@ -976,6 +985,7 @@ async function nuke() {
     localStorage.removeItem(K_NICK);
     localStorage.removeItem(K_VAULT);
     localStorage.removeItem(K_VSALT);
+    flushType();
     $out.innerHTML = '';
     ln(`  <span class="dm">All data wiped. Reloading...</span>`);
     setTimeout(() => location.reload(), 800);
@@ -1000,8 +1010,8 @@ async function handleChat(text) {
     cancelReconnect();
     ws?.close(); ws = null;
     hideHeader();
-    mode = 'setup';
-    resolveChat?.('quit'); resolveChat = null;
+    ln(`  <span class="dm">Reloading...</span>`);
+    setTimeout(() => location.reload(), 400);
     return;
   }
   if (s === '/nuke') {
@@ -1011,7 +1021,7 @@ async function handleChat(text) {
     if (!ok) { mode = 'chat'; showHeader(); }
     return;
   }
-  if (s === '/clear')  { $out.innerHTML = ''; return; }
+  if (s === '/clear')  { flushType(); $out.innerHTML = ''; return; }
   if (s === '/room')   { ln(`  Room: <span class="cy">?${esc(curRoom)}</span>`); return; }
   if (s === '/who')    { ln(`  Online (${users.size}): <span class="cy">${[...users].sort().map(esc).join(', ')}</span>`); return; }
   if (s === '/format') { fmtHelp(); return; }
@@ -1234,6 +1244,7 @@ async function main() {
   let first = true;
 
   while (true) {
+    flushType();
     $out.innerHTML = '';
     mode = 'setup';
     hideHeader();
@@ -1251,6 +1262,7 @@ async function main() {
       if (c === '/readme') {
         readme();
         await waitInput();
+        flushType();
         $out.innerHTML = '';
         first = false;
         continue;
@@ -1283,6 +1295,7 @@ async function main() {
           await new Promise(r => setTimeout(r, 600));
           continue;
         }
+        flushType();
         $out.innerHTML = '';
         first = false;
         continue;
