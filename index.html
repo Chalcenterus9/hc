@@ -173,8 +173,8 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.2.0';
-const DATE    = '19.03.2026';
+const VER     = '0.2.1';
+const DATE    = '20.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
 const K_NICK  = 'hc_nick';
@@ -256,16 +256,80 @@ const store = {
 // ── Output ────────────────────────────────────────────────────────────────────
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-function print(html) {
+// ── Typewriter engine ─────────────────────────────────────────────────────────
+const typeQueue = [];
+let typing = false;
+
+function print(html, typed = false) {
   const atBottom = $out.scrollTop + $out.clientHeight >= $out.scrollHeight - 10;
   const s = document.createElement('span');
   s.className = 'ln';
   s.innerHTML = html;
-  $out.appendChild(s);
-  if (atBottom) $out.scrollTop = $out.scrollHeight;
+
+  if (typed) {
+    // Collect text nodes, store full text, empty them
+    const nodes = [];
+    const walker = document.createTreeWalker(s, NodeFilter.SHOW_TEXT);
+    let n;
+    while (n = walker.nextNode()) {
+      if (n.textContent.length > 0) {
+        nodes.push({ node: n, full: n.textContent });
+        n.textContent = '';
+      }
+    }
+    $out.appendChild(s);
+    if (atBottom) $out.scrollTop = $out.scrollHeight;
+
+    if (nodes.length > 0) {
+      typeQueue.push({ nodes });
+      if (!typing) processTypeQueue();
+    }
+  } else {
+    $out.appendChild(s);
+    if (atBottom) $out.scrollTop = $out.scrollHeight;
+  }
 }
 
-const ln = (h = '') => print(h + '\n');
+function processTypeQueue() {
+  if (typeQueue.length === 0) { typing = false; return; }
+
+  // If queue backs up, flush all but last instantly
+  while (typeQueue.length > 3) {
+    const item = typeQueue.shift();
+    item.nodes.forEach(n => n.node.textContent = n.full);
+  }
+
+  typing = true;
+  const { nodes } = typeQueue.shift();
+
+  // Build flat char list across all text nodes
+  const chars = [];
+  for (const { node, full } of nodes) {
+    for (const ch of full) chars.push({ node, ch });
+  }
+
+  let i = 0;
+  // Adaptive: finish in ~50 ticks (≈600ms), min 8ms interval
+  const interval = Math.max(8, Math.round(600 / chars.length));
+  const perTick = Math.max(1, Math.ceil(chars.length / 50));
+
+  const timer = setInterval(() => {
+    if (i >= chars.length) {
+      clearInterval(timer);
+      processTypeQueue();
+      return;
+    }
+    // Speed up if queue is building
+    const batch = typeQueue.length > 0 ? perTick * 3 : perTick;
+    for (let b = 0; b < batch && i < chars.length; b++, i++) {
+      chars[i].node.textContent += chars[i].ch;
+    }
+    const atBot = $out.scrollTop + $out.clientHeight >= $out.scrollHeight - 10;
+    if (atBot) $out.scrollTop = $out.scrollHeight;
+  }, interval);
+}
+
+const ln = (h = '', typed = false) => print(h + '\n', typed);
 
 function ts() {
   const n = new Date();
@@ -313,10 +377,11 @@ $inp.addEventListener('keydown', e => {
   const v = $inp.value;
   $inp.value = '';
 
-  if (mode === 'setup') {
+  // resolveInput takes priority (vault password, nuke confirm, setup prompts)
+  if (resolveInput) {
     const fn = resolveInput;
     resolveInput = null;
-    fn?.(v);
+    fn(v);
   } else if (mode === 'chat') {
     handleChat(v).catch(console.error);
   }
@@ -1068,26 +1133,27 @@ async function handleWsMessage({ data }) {
     }
 
     const trip = d.trip ? ` <span class="dm">(${esc(d.trip)})</span>` : '';
-    ln(`${ts()} <span class="${nickCls(who)}"><strong>${esc(who)}</strong></span>${trip}: ${text}`);
-    if (who !== curNick) notify(who, curRoom, isMention);
+    const isOwn = who === curNick;
+    ln(`${ts()} <span class="${nickCls(who)}"><strong>${esc(who)}</strong></span>${trip}: ${text}`, !isOwn);
+    if (!isOwn) notify(who, curRoom, isMention);
   }
   else if (cmd === 'onlineSet') {
     users = new Set(d.nicks || []);
-    ln(`${ts()} <span class="dm">Online: ${(d.nicks||[]).map(esc).join(', ')}</span>`);
+    ln(`${ts()} <span class="dm">Online: ${(d.nicks||[]).map(esc).join(', ')}</span>`, true);
     updateUsersCount();
   }
   else if (cmd === 'onlineAdd') {
     users.add(d.nick);
-    ln(`${ts()} <span class="yl">+ ${esc(d.nick)} joined</span>`);
+    ln(`${ts()} <span class="yl">+ ${esc(d.nick)} joined</span>`, true);
     updateUsersCount();
   }
   else if (cmd === 'onlineRemove') {
     users.delete(d.nick);
-    ln(`${ts()} <span class="dm">- ${esc(d.nick)} left</span>`);
+    ln(`${ts()} <span class="dm">- ${esc(d.nick)} left</span>`, true);
     updateUsersCount();
   }
-  else if (cmd === 'info') { ln(`${ts()} <span class="dm">i: ${esc(d.text||'')}</span>`); }
-  else if (cmd === 'warn') { ln(`${ts()} <span class="rd">! ${esc(d.text||'')}</span>`); }
+  else if (cmd === 'info') { ln(`${ts()} <span class="dm">i: ${esc(d.text||'')}</span>`, true); }
+  else if (cmd === 'warn') { ln(`${ts()} <span class="rd">! ${esc(d.text||'')}</span>`, true); }
 }
 
 // ── Connect ───────────────────────────────────────────────────────────────────
@@ -1172,6 +1238,7 @@ async function main() {
     mode = 'setup';
     hideHeader();
     curPhrase = '';
+    ghostMode = false;
 
     document.title = 'hc — hack.chat';
 
