@@ -173,11 +173,13 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.1.0';
-const DATE    = '18.03.2026';
+const VER     = '0.2.0';
+const DATE    = '19.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
 const K_NICK  = 'hc_nick';
+const K_VAULT = 'hc_vault';
+const K_VSALT = 'hc_vault_salt';
 const NC      = ['cy','yl','mg','rd','bl','gr'];
 
 // Native hack.chat commands — always sent as plaintext, bypass encryption
@@ -195,6 +197,26 @@ const NATIVE_CMDS = new Set([
   '/lock', '/unlock',
   '/enablecaptcha', '/disablecaptcha',
 ]);
+
+// 256 visually distinct emoji for fingerprint
+const FP_EMOJI = [
+  '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔',
+  '🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🪱','🐛','🦋','🐌',
+  '🐞','🐜','🪰','🪲','🦟','🦗','🕷','🦂','🐢','🐍','🦎','🦖','🦕','🐙','🦑','🦐',
+  '🦞','🦀','🐡','🐠','🐟','🐬','🐳','🐋','🦈','🐊','🐅','🐆','🦓','🦍','🦧','🐘',
+  '🦛','🦏','🐪','🐫','🦒','🦘','🦬','🐃','🐂','🐄','🐎','🐖','🐏','🐑','🦙','🐐',
+  '🦌','🐕','🐩','🦮','🐈','🐓','🦃','🦤','🦚','🦜','🦢','🦩','🕊','🐇','🦝','🦨',
+  '🦡','🦫','🦦','🦥','🐁','🐀','🐿','🦔','🌵','🎄','🌲','🌳','🌴','🪵','🌱','🌿',
+  '🍀','🎋','🍃','🍂','🍁','🌾','🌺','🌻','🌹','🥀','🌷','🌼','🫧','🌸','💐','🍄',
+  '🍇','🍈','🍉','🍊','🍋','🍌','🍍','🥭','🍎','🍏','🍐','🍑','🍒','🍓','🫐','🥝',
+  '🍅','🫒','🥥','🥑','🍆','🥔','🥕','🌽','🌶','🫑','🥒','🥬','🥦','🧄','🧅','🥜',
+  '🫘','🌰','🍞','🥐','🥖','🫓','🥨','🥯','🥞','🧇','🧀','🍖','🍗','🥩','🥓','🍔',
+  '🍟','🍕','🌭','🥪','🌮','🌯','🫔','🥙','🧆','🥚','🍳','🥘','🍲','🫕','🥣','🥗',
+  '🍿','🧈','🧂','🥫','🍱','🍘','🍙','🍚','🍛','🍜','🍝','🍠','🍢','🍣','🍤','🍥',
+  '🥮','🍡','🥟','🥠','🥡','🦪','🍦','🍧','🍨','🍩','🍪','🎂','🍰','🧁','🥧','🍫',
+  '🍬','🍭','🍮','🍯','🫖','☕','🍵','🧃','🥤','🧋','🍶','🍺','🍻','🥂','🍷','🥃',
+  '🍸','🍹','🧉','🍾','🫗','🧊','🥄','🍴','🥣','🔪','🏺','⚽','🏀','🏈','⚾','🥎',
+];
 
 // ── DOM ───────────────────────────────────────────────────────────────────────
 const $out       = document.getElementById('out');
@@ -218,9 +240,18 @@ let curRoom      = '';
 let curNick      = '';
 let curServer    = '';
 let curFullNick  = '';       // nick#password for reconnect
+let curPhrase    = '';       // secret phrase for vault save
 let reconnecting = false;
 let reconnTimer  = null;
 let reconnCount  = 0;
+let ghostMode    = false;    // /ghost — no localStorage access
+
+// ── Storage wrapper (respects ghost mode) ─────────────────────────────────────
+const store = {
+  get(k)    { return ghostMode ? null : localStorage.getItem(k); },
+  set(k, v) { if (!ghostMode) localStorage.setItem(k, v); },
+  del(k)    { if (!ghostMode) localStorage.removeItem(k); },
+};
 
 // ── Output ────────────────────────────────────────────────────────────────────
 const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -307,9 +338,13 @@ document.addEventListener('touchstart', function unlock() {
 const TE = new TextEncoder();
 const TD = new TextDecoder();
 
+async function sha256raw(data) {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+}
+
 async function sha256hex(s) {
-  const buf = await crypto.subtle.digest('SHA-256', TE.encode(s));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
+  const buf = await sha256raw(TE.encode(s));
+  return [...buf].map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
 async function deriveBaseKey(phrase) {
@@ -365,6 +400,181 @@ async function decMsg(text) {
     }
   } catch {}
   return null;
+}
+
+// ── Fingerprint (emoji) ───────────────────────────────────────────────────────
+async function getFingerprint(bk) {
+  const hash = await sha256raw(bk);
+  return [hash[0], hash[1], hash[2], hash[3]]
+    .map(b => FP_EMOJI[b % FP_EMOJI.length])
+    .join(' ');
+}
+
+function showFingerprint() {
+  if (!baseKey) {
+    ln(`  <span class="yl">No encryption key — fingerprint not available.</span>`);
+    return;
+  }
+  getFingerprint(baseKey).then(fp => {
+    ln(`  <span class="cy">Key fingerprint:</span>  ${fp}`);
+    ln(`  <span class="dm">Compare with your partner to verify same key.</span>`);
+  });
+}
+
+// ── Vault (encrypted room storage) ────────────────────────────────────────────
+async function vaultKey(password, salt) {
+  const km = await crypto.subtle.importKey('raw', TE.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name:'PBKDF2', hash:'SHA-256', salt, iterations: 100000 },
+    km, 256
+  );
+  return crypto.subtle.importKey('raw', bits, {name:'AES-GCM'}, false, ['encrypt','decrypt']);
+}
+
+async function vaultEncrypt(data, password) {
+  let salt = null;
+  const savedSalt = store.get(K_VSALT);
+  if (savedSalt) {
+    salt = Uint8Array.from(atob(savedSalt), c => c.charCodeAt(0));
+  } else {
+    salt = crypto.getRandomValues(new Uint8Array(16));
+    let bin = '';
+    for (let i = 0; i < salt.length; i++) bin += String.fromCharCode(salt[i]);
+    store.set(K_VSALT, btoa(bin));
+  }
+  const key = await vaultKey(password, salt);
+  const iv  = crypto.getRandomValues(new Uint8Array(12));
+  const ct  = new Uint8Array(await crypto.subtle.encrypt(
+    {name:'AES-GCM', iv}, key, TE.encode(JSON.stringify(data))
+  ));
+  const raw = new Uint8Array(12 + ct.byteLength);
+  raw.set(iv); raw.set(ct, 12);
+  let bin = '';
+  for (let i = 0; i < raw.length; i++) bin += String.fromCharCode(raw[i]);
+  return btoa(bin);
+}
+
+async function vaultDecrypt(b64, password) {
+  const savedSalt = store.get(K_VSALT);
+  if (!savedSalt) return null;
+  const salt = Uint8Array.from(atob(savedSalt), c => c.charCodeAt(0));
+  const key  = await vaultKey(password, salt);
+  const raw  = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const iv   = raw.slice(0, 12);
+  const ct   = raw.slice(12);
+  try {
+    const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ct);
+    return JSON.parse(TD.decode(pt));
+  } catch {
+    return null;
+  }
+}
+
+function hasVault() {
+  return !ghostMode && !!store.get(K_VAULT);
+}
+
+async function openVault() {
+  ln();
+  ln(`  <span class="cy">Vault</span> — enter master password:`);
+  const pw = (await waitInput()).trim();
+  if (!pw) { ln(`  <span class="dm">Cancelled.</span>`); return null; }
+  const enc = store.get(K_VAULT);
+  if (!enc) { ln(`  <span class="dm">Vault is empty.</span>`); return null; }
+  const rooms = await vaultDecrypt(enc, pw);
+  if (!rooms) {
+    ln(`  <span class="rd">! Wrong password or corrupted vault.</span>`);
+    return null;
+  }
+  return { rooms, password: pw };
+}
+
+async function showVaultAndPick() {
+  const v = await openVault();
+  if (!v) return null;
+  const { rooms, password } = v;
+  if (rooms.length === 0) {
+    ln(`  <span class="dm">Vault is empty. Use /save in chat to add rooms.</span>`);
+    return null;
+  }
+  ln();
+  ln(`  <span class="cy">Saved rooms:</span>`);
+  rooms.forEach((r, i) => {
+    const label = r.phrase
+      ? `<span class="gr">[enc]</span> ${esc(r.phrase.length > 20 ? r.phrase.slice(0,20)+'…' : r.phrase)}`
+      : `<span class="dm">[pub]</span> ?${esc(r.room)}`;
+    const srv = r.server !== DEF_SRV ? ` <span class="dm">(${esc(r.server.replace(/^wss?:\/\//, ''))})</span>` : '';
+    ln(`    <span class="cy">${i + 1}.</span> ${label}${srv}  <span class="dm">as</span> ${esc(r.nick.split('#')[0])}`);
+  });
+  ln();
+  ln(`  <span class="cy">[number]</span> connect  <span class="cy">[Enter]</span> cancel  <span class="cy">[/del N]</span> remove`);
+  while (true) {
+    const cmd = (await waitInput()).trim();
+    if (!cmd) return null;
+    const delMatch = cmd.match(/^\/del\s+(\d+)$/i);
+    if (delMatch) {
+      const idx = parseInt(delMatch[1]) - 1;
+      if (idx >= 0 && idx < rooms.length) {
+        const removed = rooms.splice(idx, 1)[0];
+        const label = removed.phrase || ('?' + removed.room);
+        const enc = await vaultEncrypt(rooms, password);
+        store.set(K_VAULT, enc);
+        ln(`  <span class="dm">Removed: ${esc(label.slice(0,24))}</span>`);
+        if (rooms.length === 0) {
+          ln(`  <span class="dm">Vault is now empty.</span>`);
+          return null;
+        }
+        rooms.forEach((r, i) => {
+          const l = r.phrase
+            ? `<span class="gr">[enc]</span> ${esc(r.phrase.length > 20 ? r.phrase.slice(0,20)+'…' : r.phrase)}`
+            : `<span class="dm">[pub]</span> ?${esc(r.room)}`;
+          ln(`    <span class="cy">${i + 1}.</span> ${l}`);
+        });
+        continue;
+      }
+      ln(`  <span class="rd">! Invalid number.</span>`);
+      continue;
+    }
+    const n = parseInt(cmd);
+    if (n >= 1 && n <= rooms.length) {
+      return { entry: rooms[n - 1], password };
+    }
+    ln(`  <span class="rd">! Enter a number 1-${rooms.length}, /del N, or Enter to cancel.</span>`);
+  }
+}
+
+async function saveToVault() {
+  if (ghostMode) {
+    ln(`  <span class="yl">Ghost mode — vault disabled.</span>`);
+    return;
+  }
+  const existing = store.get(K_VAULT);
+  let password, rooms;
+  if (existing) {
+    ln(`  <span class="cy">Vault password:</span>`);
+    password = (await waitInput()).trim();
+    if (!password) { ln(`  <span class="dm">Cancelled.</span>`); return; }
+    rooms = await vaultDecrypt(existing, password);
+    if (!rooms) { ln(`  <span class="rd">! Wrong password.</span>`); return; }
+  } else {
+    ln(`  <span class="cy">Set vault master password</span> (first time):`);
+    password = (await waitInput()).trim();
+    if (!password) { ln(`  <span class="dm">Cancelled.</span>`); return; }
+    ln(`  <span class="cy">Confirm password:</span>`);
+    const confirm = (await waitInput()).trim();
+    if (confirm !== password) { ln(`  <span class="rd">! Passwords don't match.</span>`); return; }
+    rooms = [];
+  }
+  const isDup = rooms.some(r => r.room === curRoom && r.server === curServer);
+  if (isDup) {
+    ln(`  <span class="yl">This room is already in vault.</span>`);
+    return;
+  }
+  rooms.push({ room: curRoom, phrase: curPhrase || '', server: curServer, nick: curFullNick });
+  const enc = await vaultEncrypt(rooms, password);
+  store.set(K_VAULT, enc);
+  const label = curPhrase || ('?' + curRoom);
+  ln(`  <span class="gr">✓ Saved to vault:</span> ${esc(label.length > 24 ? label.slice(0,24)+'…' : label)}`);
 }
 
 // ── Markdown ──────────────────────────────────────────────────────────────────
@@ -481,6 +691,7 @@ function readme() {
   ln(`    Enabled automatically when secret phrase is used`);
   ln(`    Key rotates every hour (UTC-based, ±1h tolerance)`);
   ln(`    <span class="cy">/enc</span> toggles on/off in chat`);
+  ln(`    <span class="cy">/fp</span> shows key fingerprint (4 emoji)`);
   ln(`    Users without key see <span class="dm">[encrypted]</span>`);
   ln(`    You see their plaintext normally`);
   ln();
@@ -491,6 +702,8 @@ function readme() {
   ln();
   ln(`  <strong>COMMANDS</strong>`);
   ln(`    <span class="cy">/enc</span>      toggle encryption on/off`);
+  ln(`    <span class="cy">/fp</span>       key fingerprint (emoji)`);
+  ln(`    <span class="cy">/save</span>     save room to vault`);
   ln(`    <span class="cy">/quit</span>     disconnect &amp; back to start (alias: /exit)`);
   ln(`    <span class="cy">/nuke</span>     wipe all saved data &amp; reload`);
   ln(`    <span class="cy">/clear</span>    clear screen`);
@@ -501,6 +714,10 @@ function readme() {
   ln(`    <span class="cy">/format</span>   markdown cheat sheet`);
   ln(`    <span class="cy">/readme</span>   this guide`);
   ln(`    <span class="cy">/help</span>     command list`);
+  ln();
+  ln(`  <strong>STARTUP COMMANDS</strong>`);
+  ln(`    <span class="cy">/ghost</span>    stealth mode — nothing saved to device`);
+  ln(`    <span class="cy">/vault</span>    open saved rooms (master password required)`);
   ln();
   ln(`  <strong>NATIVE SERVER COMMANDS</strong>`);
   ln(`    <span class="dm">/whisper /nick /move /ignore /unignore</span>`);
@@ -530,6 +747,7 @@ function fmtHelp() {
 function showHelp() {
   ln();
   ln(`  <span class="cy">/enc</span>    toggle encryption   <span class="cy">/clear</span>   clear screen`);
+  ln(`  <span class="cy">/fp</span>     key fingerprint     <span class="cy">/save</span>    save to vault`);
   ln(`  <span class="cy">/room</span>   room info           <span class="cy">/who</span>     online users`);
   ln(`  <span class="cy">/dm</span>     whisper to user     <span class="cy">/me</span>      emote action`);
   ln(`  <span class="cy">/format</span> markdown help       <span class="cy">/readme</span>  full guide`);
@@ -556,13 +774,13 @@ function isValidRoom(s) {
 
 // ── Setup screens ─────────────────────────────────────────────────────────────
 async function setupServer() {
-  const saved = localStorage.getItem(K_SRV);
+  const saved = store.get(K_SRV);
   if (saved) {
     ln(`  Saved server: <span class="cy">${esc(saved)}</span>`);
     ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> reset  <span class="cy">[url /s]</span> save new`);
     const v = (await waitInput()).trim();
     if (v === '/r') {
-      localStorage.removeItem(K_SRV);
+      store.del(K_SRV);
       ln(`  <span class="dm">Reset to hack.chat.</span>`);
       return DEF_SRV;
     }
@@ -572,7 +790,7 @@ async function setupServer() {
         ln(`  <span class="rd">! Invalid URL. Must start with wss:// or ws://</span>`);
         return await setupServer();
       }
-      localStorage.setItem(K_SRV, s);
+      store.set(K_SRV, s);
       return s;
     }
     if (v && !isValidWsUrl(v)) {
@@ -590,7 +808,7 @@ async function setupServer() {
         ln(`  <span class="rd">! Invalid URL. Must start with wss:// or ws://</span>`);
         return await setupServer();
       }
-      localStorage.setItem(K_SRV, s);
+      store.set(K_SRV, s);
       return s;
     }
     if (v && !isValidWsUrl(v)) {
@@ -608,12 +826,14 @@ async function setupRoom() {
   ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room`);
   const phrase = await waitInput();
   if (phrase.trim()) {
+    curPhrase = phrase;
     const h = await sha256hex(phrase);
     baseKey = await deriveBaseKey(phrase);
     encOn = true;
     ln(`  <span class="dm">Room hash: ${h.slice(0,12)}...</span>`);
     return h;
   } else {
+    curPhrase = '';
     ln(`  Room name`);
     let r;
     while (true) {
@@ -628,13 +848,13 @@ async function setupRoom() {
 
 async function setupNick() {
   ln();
-  const saved = localStorage.getItem(K_NICK);
+  const saved = store.get(K_NICK);
   if (saved) {
     ln(`  Saved nick: <span class="cy">${esc(saved.split('#')[0])}</span>`);
     ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> forget  <span class="cy">[name /s]</span> save new`);
     const v = (await waitInput()).trim();
     if (v === '/r') {
-      localStorage.removeItem(K_NICK);
+      store.del(K_NICK);
       ln(`  <span class="dm">Forgot saved nick.</span>`);
       return await askNick();
     }
@@ -644,7 +864,7 @@ async function setupNick() {
         ln(`  <span class="rd">! Nick: 1-24 chars, a-z 0-9 _ only (before #).</span>`);
         return await setupNick();
       }
-      localStorage.setItem(K_NICK, nick);
+      store.set(K_NICK, nick);
       return nick;
     }
     if (v) {
@@ -670,7 +890,7 @@ async function askNick() {
       ln(`  <span class="rd">! Nick: 1-24 chars, a-z 0-9 _ only (before #).</span>`);
       return await askNick();
     }
-    localStorage.setItem(K_NICK, nick);
+    store.set(K_NICK, nick);
     return nick;
   }
   if (!v || !isValidNick(v)) {
@@ -689,6 +909,8 @@ async function nuke() {
   if (v === 'YES') {
     localStorage.removeItem(K_SRV);
     localStorage.removeItem(K_NICK);
+    localStorage.removeItem(K_VAULT);
+    localStorage.removeItem(K_VSALT);
     $out.innerHTML = '';
     ln(`  <span class="dm">All data wiped. Reloading...</span>`);
     setTimeout(() => location.reload(), 800);
@@ -730,6 +952,12 @@ async function handleChat(text) {
   if (s === '/format') { fmtHelp(); return; }
   if (s === '/readme') { readme(); return; }
   if (s === '/help')   { showHelp(); return; }
+  if (s === '/fp')     { showFingerprint(); return; }
+
+  if (s === '/save') {
+    await saveToVault();
+    return;
+  }
 
   if (s === '/enc') {
     if (!baseKey) {
@@ -888,6 +1116,13 @@ function connectChat(server, room, nick) {
         ? `<span class="gr">[ENC ON]</span>`
         : `<span class="dm">[no enc]</span>`;
       ln(`  <span class="dm">Connected to</span> <span class="cy">?${esc(short)}</span>  ${enc}`);
+      if (ghostMode) ln(`  <span class="dm">👻 ghost mode — nothing saved</span>`);
+      // Show fingerprint on connect if encrypted
+      if (encOn && baseKey) {
+        getFingerprint(baseKey).then(fp => {
+          ln(`  <span class="dm">Key fingerprint:</span>  ${fp}`);
+        });
+      }
       ln(`  <span class="dm">/help for commands</span>`);
       ln();
       mode = 'chat';
@@ -936,23 +1171,61 @@ async function main() {
     $out.innerHTML = '';
     mode = 'setup';
     hideHeader();
+    curPhrase = '';
 
-    // Reset title
     document.title = 'hc — hack.chat';
 
     if (first) {
       banner();
-      ln(`  <span class="cy">[Enter]</span> start  <span class="cy">[/readme]</span> quick guide`);
+      const vaultHint = hasVault() ? `  <span class="cy">[/vault]</span> saved rooms` : '';
+      ln(`  <span class="cy">[Enter]</span> start  <span class="cy">[/readme]</span> guide  <span class="cy">[/ghost]</span> stealth${vaultHint}`);
       const c = (await waitInput()).trim();
+
       if (c === '/readme') {
         readme();
         await waitInput();
         $out.innerHTML = '';
+        first = false;
+        continue;
       }
+
+      if (c === '/ghost') {
+        ghostMode = true;
+        ln(`  <span class="dm">👻 Ghost mode — nothing will be saved to device.</span>`);
+      }
+
+      if (c === '/vault') {
+        const result = await showVaultAndPick();
+        if (result) {
+          first = false;
+          const { entry } = result;
+          if (entry.phrase) {
+            curPhrase = entry.phrase;
+            const h = await sha256hex(entry.phrase);
+            baseKey = await deriveBaseKey(entry.phrase);
+            encOn = true;
+            await connectChat(entry.server, h, entry.nick);
+          } else {
+            baseKey = null; encOn = false;
+            await connectChat(entry.server, entry.room, entry.nick);
+          }
+          cancelReconnect();
+          hideHeader();
+          ln();
+          ln(`  <span class="dm">Back to start...</span>`);
+          await new Promise(r => setTimeout(r, 600));
+          continue;
+        }
+        $out.innerHTML = '';
+        first = false;
+        continue;
+      }
+
       first = false;
     }
 
     ln(`  <span class="cy"><strong>hc</strong></span><span class="dm">.py v${VER}</span>`);
+    if (ghostMode) ln(`  <span class="dm">👻 ghost</span>`);
     ln();
 
     const server = await setupServer();
