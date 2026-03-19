@@ -33,6 +33,7 @@
       font-size: 10px;
       line-height: 1.6;
       overflow: hidden;
+      overscroll-behavior: none;
       -webkit-text-size-adjust: 100%;
       position: fixed;
       width: 100%;
@@ -76,6 +77,7 @@
     #out {
       flex: 1;
       overflow-y: auto;
+      overscroll-behavior: none;
       padding: calc(24px + env(safe-area-inset-top, 0px)) 14px 4px;
       white-space: pre-wrap;
       word-break: break-word;
@@ -295,6 +297,12 @@ $out.addEventListener('click', () => $inp.focus());
 // Auto-focus on load
 window.addEventListener('load', () => $inp.focus());
 
+// Unlock AudioContext on first user interaction (required by iOS)
+document.addEventListener('touchstart', function unlock() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  document.removeEventListener('touchstart', unlock);
+}, { once: true });
+
 // ── Crypto (Web Crypto API) ───────────────────────────────────────────────────
 const TE = new TextEncoder();
 const TD = new TextDecoder();
@@ -398,8 +406,34 @@ async function askNotif() {
     notifOK = (await Notification.requestPermission()) === 'granted';
   }
 }
+
+// ── Sound ─────────────────────────────────────────────────────────────────────
+let audioCtx = null;
+function beep(freq = 660, duration = 0.08) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + duration);
+  } catch {}
+}
+
 function notify(who, room, isMention) {
   if (document.hasFocus() && !isMention) return;
+  // Beep: short for regular, double for mention
+  if (isMention) {
+    beep(880, 0.08);
+    setTimeout(() => beep(1100, 0.1), 120);
+  } else {
+    beep(660, 0.08);
+  }
   if (notifOK) {
     const body = isMention
       ? `${who} mentioned you in ?${room.slice(0,12)}`
@@ -570,6 +604,7 @@ async function setupServer() {
 async function setupRoom() {
   ln();
   ln(`  Secret phrase`);
+  ln(`  <span class="dm">  use 4+ random words for strong encryption</span>`);
   ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room`);
   const phrase = await waitInput();
   if (phrase.trim()) {
