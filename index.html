@@ -284,6 +284,15 @@ function print(html, typed = false) {
         n.textContent = '';
       }
     }
+    // Skip typewriter for whitespace-only content
+    const totalText = nodes.map(n => n.full).join('');
+    if (!totalText.trim()) {
+      nodes.forEach(n => n.node.textContent = n.full);
+      $out.appendChild(s);
+      if (atBottom) $out.scrollTop = $out.scrollHeight;
+      return;
+    }
+
     $out.appendChild(s);
     if (atBottom) $out.scrollTop = $out.scrollHeight;
 
@@ -847,12 +856,15 @@ function isValidRoom(s) {
 }
 
 // ── Setup screens ─────────────────────────────────────────────────────────────
+const HOME = Symbol('home');
+function goHome() { location.reload(); return HOME; }
 async function setupServer() {
   const saved = store.get(K_SRV);
   if (saved) {
     ln(`  Saved server: <span class="cy">${esc(saved)}</span>`);
-    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> reset  <span class="cy">[url /s]</span> save new`);
+    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> reset  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home</span>`);
     const v = (await waitInput()).trim();
+    if (v === '/') return goHome();
     if (v === '/r') {
       store.del(K_SRV);
       ln(`  <span class="dm">Reset to hack.chat.</span>`);
@@ -874,8 +886,9 @@ async function setupServer() {
     return v || saved;
   } else {
     ln(`  Custom server?`);
-    ln(`  <span class="cy">[Enter]</span> hack.chat  <span class="cy">[url /s]</span> save new`);
+    ln(`  <span class="cy">[Enter]</span> hack.chat  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home</span>`);
     const v = (await waitInput()).trim();
+    if (v === '/') return goHome();
     if (v.endsWith(' /s')) {
       const s = v.slice(0,-3).trim();
       if (!isValidWsUrl(s)) {
@@ -897,8 +910,9 @@ async function setupRoom() {
   ln();
   ln(`  Secret phrase`);
   ln(`  <span class="dm">  use 4+ random words for strong encryption</span>`);
-  ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room`);
+  ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room  <span class="dm">[/] home</span>`);
   const phrase = await waitInput();
+  if (phrase.trim() === '/') return goHome();
   if (phrase.trim()) {
     curPhrase = phrase;
     const h = await sha256hex(phrase);
@@ -908,10 +922,11 @@ async function setupRoom() {
     return h;
   } else {
     curPhrase = '';
-    ln(`  Room name`);
+    ln(`  Room name  <span class="dm">[/] home</span>`);
     let r;
     while (true) {
       r = (await waitInput()).trim();
+      if (r === '/') return goHome();
       if (isValidRoom(r)) break;
       ln(`  <span class="rd">! Room name cannot be empty.</span>`);
     }
@@ -925,8 +940,9 @@ async function setupNick() {
   const saved = store.get(K_NICK);
   if (saved) {
     ln(`  Saved nick: <span class="cy">${esc(saved.split('#')[0])}</span>`);
-    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> forget  <span class="cy">[name /s]</span> save new`);
+    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> forget  <span class="cy">[name /s]</span> save new  <span class="dm">[/] home</span>`);
     const v = (await waitInput()).trim();
+    if (v === '/') return goHome();
     if (v === '/r') {
       store.del(K_NICK);
       ln(`  <span class="dm">Forgot saved nick.</span>`);
@@ -956,8 +972,9 @@ async function setupNick() {
 
 async function askNick() {
   ln();
-  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save`);
+  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save  <span class="dm">[/] home</span>`);
   const v = (await waitInput()).trim();
+  if (v === '/') return goHome();
   if (v.endsWith(' /s')) {
     const nick = v.slice(0,-3).trim();
     if (!isValidNick(nick)) {
@@ -1295,10 +1312,9 @@ async function main() {
           await new Promise(r => setTimeout(r, 600));
           continue;
         }
-        flushType();
-        $out.innerHTML = '';
-        first = false;
-        continue;
+        // Cancelled — back to start
+        location.reload();
+        return;
       }
 
       first = false;
@@ -1309,8 +1325,11 @@ async function main() {
     ln();
 
     const server = await setupServer();
+    if (server === HOME) return;
     const room   = await setupRoom();
+    if (room === HOME) return;
     const nick   = await setupNick();
+    if (nick === HOME) return;
 
     if (!nick) {
       ln(`  <span class="rd">! Nickname is required.</span>`);
