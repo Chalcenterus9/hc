@@ -232,6 +232,38 @@
       55%  { opacity: 0.5; }
       100% { opacity: 0; }
     }
+
+    /* ── Boot oscilloscope ── */
+    .boot-scope {
+      border: 1px solid var(--cy);
+      margin: 8px 0 4px;
+      overflow: hidden;
+      opacity: 0.8;
+    }
+    .boot-hdr {
+      font-size: 9px;
+      color: var(--dm);
+      padding: 2px 8px;
+      border-bottom: 1px solid rgba(128,128,128,0.15);
+      letter-spacing: 1px;
+    }
+    .boot-canvas {
+      width: 100%;
+      height: 55px;
+      display: block;
+    }
+    .boot-logs {
+      border-top: 1px solid rgba(128,128,128,0.15);
+      padding: 3px 8px;
+      font-size: 9px;
+      color: var(--dm);
+      line-height: 1.5;
+    }
+    .boot-log-line {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   </style>
 </head>
 <body>
@@ -258,7 +290,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.3.1';
+const VER     = '0.3.3';
 const DATE    = '20.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -293,6 +325,18 @@ const THEMES = {
     bg:'#eceff4', fg:'#2e3440', cy:'#5e81ac', yl:'#d08770', mg:'#b48ead',
     rd:'#bf616a', bl:'#5e81ac', gr:'#a3be8c', dm:'#7b88a1', hdr:'#e5e9f0',
     hy:'#ebcb8b40', hyr:'#bf616a30', hyg:'#a3be8c30', hyb:'#5e81ac30', mn:'#ebcb8b40',
+  },
+  space: {
+    label: 'Space',
+    bg:'#080c18', fg:'#b8c4d8', cy:'#4a8ab8', yl:'#c8a850', mg:'#706898',
+    rd:'#b85450', bl:'#5080b8', gr:'#5a9870', dm:'#506078', hdr:'#04060e',
+    hy:'#282800', hyr:'#280808', hyg:'#082810', hyb:'#081828', mn:'#282800',
+  },
+  cassette: {
+    label: 'Cassette',
+    bg:'#f0e8d0', fg:'#2a2018', cy:'#7830a0', yl:'#e06820', mg:'#c03868',
+    rd:'#d03028', bl:'#5028a0', gr:'#608828', dm:'#8a7a60', hdr:'#e8dfc4',
+    hy:'#e8682030', hyr:'#d0302830', hyg:'#60882830', hyb:'#5028a030', mn:'#e8682030',
   },
 };
 
@@ -969,6 +1013,144 @@ function banner() {
   ln();
 }
 
+// ── Boot oscilloscope ─────────────────────────────────────────────────────────
+function startBootSequence() {
+  const container = document.createElement('div');
+  container.className = 'boot-scope';
+
+  const hdr = document.createElement('div');
+  hdr.className = 'boot-hdr';
+  hdr.textContent = '┤ SIGNAL MONITOR ├';
+  container.appendChild(hdr);
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'boot-canvas';
+  canvas.width = 300;
+  canvas.height = 55;
+  container.appendChild(canvas);
+
+  const logEl = document.createElement('div');
+  logEl.className = 'boot-logs';
+  container.appendChild(logEl);
+
+  $out.appendChild(container);
+
+  // Resize canvas to actual pixel width for crisp rendering
+  requestAnimationFrame(() => {
+    const w = container.clientWidth;
+    if (w > 0) { canvas.width = w; }
+  });
+
+  const ctx = canvas.getContext('2d');
+  let phase = Math.random() * Math.PI * 2;
+  let freq = 0.03 + Math.random() * 0.02;
+  let amp = 12 + Math.random() * 10;
+  let freqTarget = freq;
+  let ampTarget = amp;
+  let running = true;
+  let rafId = null;
+
+  function themeColor(v) {
+    return getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  }
+
+  function draw() {
+    if (!running) return;
+    const cy = themeColor('--cy') || '#4ec9b0';
+    const W = canvas.width, H = canvas.height;
+
+    // Drift targets randomly
+    if (Math.random() < 0.005) {
+      freqTarget = 0.015 + Math.random() * 0.06;
+      ampTarget = 8 + Math.random() * 18;
+    }
+    freq += (freqTarget - freq) * 0.015;
+    amp += (ampTarget - amp) * 0.015;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Grid
+    ctx.globalAlpha = 0.08;
+    ctx.strokeStyle = cy;
+    ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 24) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = 0; y < H; y += 11) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // Center line
+    ctx.globalAlpha = 0.15;
+    ctx.beginPath();
+    ctx.moveTo(0, H / 2);
+    ctx.lineTo(W, H / 2);
+    ctx.stroke();
+
+    // Sine wave
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.strokeStyle = cy;
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = cy;
+    ctx.shadowBlur = 6;
+
+    for (let x = 0; x < W; x++) {
+      const noise = (Math.random() - 0.5) * 1.2;
+      const y = (H / 2) + amp * Math.sin(x * freq + phase) + noise;
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    phase += 0.09;
+    rafId = requestAnimationFrame(draw);
+  }
+
+  // Fake log messages
+  const LOGS = [
+    () => `INIT crypto_module... OK`,
+    () => `SCAN wss://hack.chat:443... OPEN`,
+    () => `LOAD e2e_engine v2.${Math.floor(Math.random()*9)}.${Math.floor(Math.random()*20)}`,
+    () => `SYNC clock_drift: +${(Math.random()*0.01).toFixed(4)}ms`,
+    () => `HASH pbkdf2_room_v2 [500k iter]... READY`,
+    () => `PROBE signal_${Math.random().toString(16).slice(2,6)}... ACK`,
+    () => `ALLOC buffer 0x${Math.random().toString(16).slice(2,10).toUpperCase()}`,
+    () => `VERIFY cert_chain... TRUSTED`,
+    () => `MOUNT /dev/ws0 → relay`,
+    () => `CHECK entropy_pool: ${(Math.random()*100).toFixed(1)}%`,
+    () => `BIND socket_${Math.floor(Math.random()*9999)}... LISTENING`,
+    () => `PING rtt=${Math.floor(Math.random()*50+10)}ms jitter=${Math.floor(Math.random()*5)}ms`,
+    () => `SEED prng 0x${Math.random().toString(16).slice(2,14).toUpperCase()}`,
+    () => `DERIVE hkdf_key period_${periodStr(0)}`,
+    () => `REGISTER handler_ws... ATTACHED`,
+    () => `GC sweep: ${Math.floor(Math.random()*200+50)} objects freed`,
+  ];
+
+  function addLog() {
+    if (!running) return;
+    const line = document.createElement('div');
+    line.className = 'boot-log-line';
+    line.textContent = '› ' + LOGS[Math.floor(Math.random() * LOGS.length)]();
+    logEl.appendChild(line);
+    while (logEl.children.length > 4) logEl.removeChild(logEl.firstChild);
+  }
+
+  // Stagger initial logs
+  addLog();
+  setTimeout(() => addLog(), 250);
+  setTimeout(() => addLog(), 600);
+
+  const logTimer = setInterval(() => addLog(), 1200 + Math.random() * 800);
+  draw();
+
+  return function stop() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    clearInterval(logTimer);
+  };
+}
+
 function readme() {
   ln();
   ln(`  <span class="cy"><strong>══ HOW IT WORKS ══</strong></span>`);
@@ -1516,10 +1698,12 @@ async function main() {
 
     if (first) {
       banner();
+      const stopBoot = startBootSequence();
       const vaultHint = hasVault() ? `  <span class="cy">[/vault]</span> saved rooms` : '';
       ln(`  <span class="cy">[Enter]</span> start  <span class="cy">[/readme]</span> guide  <span class="cy">[/ghost]</span> stealth`);
       ln(`  <span class="cy">[/options]</span> settings${vaultHint}`);
       const c = (await waitInput()).trim();
+      stopBoot();
 
       if (c === '/readme') {
         readme();
