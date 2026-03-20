@@ -290,7 +290,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.0';
+const VER     = '0.4.1';
 const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -395,7 +395,7 @@ async function showThemePicker() {
 // ── Font size ─────────────────────────────────────────────────────────────────
 function applyFontSize(px) {
   const size = Math.max(10, Math.min(16, px));
-  document.documentElement.style.fontSize = size + 'px';
+  document.body.style.fontSize = size + 'px';
   store.set(K_FONT, String(size));
 }
 
@@ -1731,7 +1731,22 @@ async function handleWsMessage({ data }) {
     updateUsersCount();
   }
   else if (cmd === 'info') { ln(`${ts()} <span class="dm">i: ${esc(d.text||'')}</span>`, true); }
-  else if (cmd === 'warn') { ln(`${ts()} <span class="rd">! ${esc(d.text||'')}</span>`, true); }
+  else if (cmd === 'warn') {
+    const warnText = d.text || '';
+    ln(`${ts()} <span class="rd">! ${esc(warnText)}</span>`, true);
+    // Nick taken — ghost session still alive on server, auto-retry
+    if (mode === 'chat' && /nick/i.test(warnText)) {
+      ln(`${ts()} <span class="yl">⟳ Ghost session detected — retrying in 5s...</span>`);
+      cancelReconnect();
+      reconnecting = true;  // prevent onclose from scheduling its own reconnect
+      $hdrReconn.style.display = '';
+      reconnTimer = setTimeout(() => {
+        reconnTimer = null;
+        reconnecting = false;
+        doReconnect();
+      }, 5000);
+    }
+  }
 }
 
 // ── Connect ───────────────────────────────────────────────────────────────────
