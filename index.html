@@ -290,14 +290,15 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.3.3';
-const DATE    = '20.03.2026';
+const VER     = '0.4.0';
+const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
 const K_NICK  = 'hc_nick';
 const K_VAULT = 'hc_vault';
 const K_VSALT = 'hc_vault_salt';
 const K_THEME = 'hc_theme';
+const K_FONT  = 'hc_font';
 const NC      = ['cy','yl','mg','rd','bl','gr'];
 
 // ── Themes ────────────────────────────────────────────────────────────────────
@@ -389,6 +390,58 @@ async function showThemePicker() {
   } else {
     ln(`  <span class="dm">Cancelled.</span>`);
   }
+}
+
+// ── Font size ─────────────────────────────────────────────────────────────────
+function applyFontSize(px) {
+  const size = Math.max(10, Math.min(16, px));
+  document.documentElement.style.fontSize = size + 'px';
+  store.set(K_FONT, String(size));
+}
+
+function loadSavedFontSize() {
+  const saved = store.get(K_FONT);
+  if (saved) applyFontSize(parseInt(saved));
+}
+
+async function showFontPicker() {
+  const cur = parseInt(store.get(K_FONT) || '10');
+  ln();
+  ln(`  <span class="cy">Font size:</span> ${cur}px`);
+  ln(`  <span class="cy">[+]</span> bigger  <span class="cy">[-]</span> smaller  <span class="cy">[10-16]</span> set  <span class="cy">[Enter]</span> done`);
+  while (true) {
+    const v = (await waitInput()).trim();
+    if (!v) return;
+    const c = parseInt(store.get(K_FONT) || '10');
+    if (v === '+') {
+      applyFontSize(c + 1);
+      ln(`  <span class="gr">→</span> ${Math.min(c + 1, 16)}px`);
+    } else if (v === '-') {
+      applyFontSize(c - 1);
+      ln(`  <span class="gr">→</span> ${Math.max(c - 1, 10)}px`);
+    } else {
+      const n = parseInt(v);
+      if (n >= 10 && n <= 16) {
+        applyFontSize(n);
+        ln(`  <span class="gr">→</span> ${n}px`);
+      } else {
+        ln(`  <span class="dm">10-16, + or -</span>`);
+      }
+    }
+  }
+}
+
+// ── Options menu ──────────────────────────────────────────────────────────────
+async function showOptions() {
+  ln();
+  ln(`  <span class="cy"><strong>Options</strong></span>`);
+  ln(`    <span class="cy">1.</span> Theme`);
+  ln(`    <span class="cy">2.</span> Font size`);
+  ln();
+  ln(`  <span class="cy">[number]</span> select  <span class="cy">[Enter]</span> back`);
+  const v = (await waitInput()).trim();
+  if (v === '1') { await showThemePicker(); return await showOptions(); }
+  if (v === '2') { await showFontPicker(); return await showOptions(); }
 }
 
 // Native hack.chat commands — always sent as plaintext, bypass encryption
@@ -940,6 +993,12 @@ function md(s) {
     }
     return `<span class="hy">${t}</span>`;
   });
+  // [text](url) markdown links
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener" class="bl" style="text-decoration:underline">$1</a>');
+  // Bare URLs (not already inside href="...")
+  s = s.replace(/(?<!href="|">)(https?:\/\/[^\s<&]+)/g,
+    '<a href="$1" target="_blank" rel="noopener" class="bl" style="text-decoration:underline">$1</a>');
   return s;
 }
 
@@ -1055,7 +1114,11 @@ function startBootSequence() {
   }
 
   function draw() {
-    if (!running) return;
+    if (!running || !canvas.isConnected) {
+      running = false;
+      clearInterval(logTimer);
+      return;
+    }
     const cy = themeColor('--cy') || '#4ec9b0';
     const W = canvas.width, H = canvas.height;
 
@@ -1143,12 +1206,6 @@ function startBootSequence() {
 
   const logTimer = setInterval(() => addLog(), 1200 + Math.random() * 800);
   draw();
-
-  return function stop() {
-    running = false;
-    if (rafId) cancelAnimationFrame(rafId);
-    clearInterval(logTimer);
-  };
 }
 
 function readme() {
@@ -1177,11 +1234,13 @@ function readme() {
   ln(`    <strong>**bold**</strong>  <em>*italic*</em>  <span class="st">~~strike~~</span>  <span class="ul">__underline__</span>`);
   ln(`    <span class="dm cy">\`code\`</span>  <strong><em>***bold italic***</em></strong>`);
   ln(`    <span class="hy">==highlight==</span>  <span class="hyr">==r:red==</span>  <span class="hyg">==g:green==</span>  <span class="hyb">==b:blue==</span>`);
+  ln(`    <span class="bl">[link text](https://...)</span>  or paste a bare URL`);
   ln();
   ln(`  <strong>COMMANDS</strong>`);
   ln(`    <span class="cy">/enc</span>      toggle encryption on/off`);
   ln(`    <span class="cy">/fp</span>       key fingerprint (emoji)`);
-  ln(`    <span class="cy">/theme</span>    switch color theme`);
+  ln(`    <span class="cy">/options</span>  theme &amp; font size`);
+  ln(`    <span class="cy">/theme</span>    quick theme switch`);
   ln(`    <span class="cy">/save</span>     save room to vault`);
   ln(`    <span class="cy">/quit</span>     disconnect &amp; back to start (alias: /exit)`);
   ln(`    <span class="cy">/nuke</span>     wipe all saved data &amp; reload`);
@@ -1194,10 +1253,16 @@ function readme() {
   ln(`    <span class="cy">/readme</span>   this guide`);
   ln(`    <span class="cy">/help</span>     command list`);
   ln();
+  ln(`  <strong>EMOTES</strong>`);
+  ln(`    <span class="cy">/shrug</span>  ¯\\_(ツ)_/¯          <span class="cy">/lenny</span>  ( ͡° ͜ʖ ͡°)`);
+  ln(`    <span class="cy">/flip</span>   (╯°□°)╯︵ ┻━┻      <span class="cy">/unflip</span> ┬─┬ノ( º _ ºノ)`);
+  ln(`    <span class="cy">/hug @nick</span>  /slap @nick  /wave @nick  /dance`);
+  ln();
   ln(`  <strong>STARTUP COMMANDS</strong>`);
   ln(`    <span class="cy">/ghost</span>    stealth mode — nothing saved to device`);
   ln(`    <span class="cy">/vault</span>    open saved rooms (master password required)`);
-  ln(`    <span class="cy">/options</span>  settings (theme picker)`);
+  ln(`    <span class="cy">/options</span>  settings (theme, font size)`);
+  ln(`    <span class="cy">/?</span>        help for current setup step`);
   ln();
   ln(`  <strong>NATIVE SERVER COMMANDS</strong>`);
   ln(`    <span class="dm">/whisper /nick /move /ignore /unignore</span>`);
@@ -1228,11 +1293,14 @@ function showHelp() {
   ln();
   ln(`  <span class="cy">/enc</span>    toggle encryption   <span class="cy">/clear</span>   clear screen`);
   ln(`  <span class="cy">/fp</span>     key fingerprint     <span class="cy">/save</span>    save to vault`);
-  ln(`  <span class="cy">/theme</span>  switch theme        <span class="cy">/who</span>     online users`);
+  ln(`  <span class="cy">/options</span> theme &amp; font size  <span class="cy">/who</span>     online users`);
   ln(`  <span class="cy">/room</span>   room info           <span class="cy">/me</span>      emote action`);
   ln(`  <span class="cy">/dm</span>     whisper to user     <span class="cy">/format</span>  markdown help`);
   ln(`  <span class="cy">/readme</span> full guide          <span class="cy">/quit</span>    back to start`);
-  ln(`  <span class="cy">/nuke</span>   wipe all data`);
+  ln(`  <span class="cy">/nuke</span>   wipe all data       <span class="cy">/theme</span>   quick theme`);
+  ln();
+  ln(`  <span class="dm">Emotes:</span> <span class="cy">/shrug</span> /lenny /flip /unflip /hug /slap /wave /dance`);
+  ln(`  <span class="dm">Links:</span>  <span class="cy">[text](url)</span> or paste a bare URL`);
   ln();
 }
 
@@ -1260,9 +1328,15 @@ async function setupServer() {
   const saved = store.get(K_SRV);
   if (saved) {
     ln(`  Saved server: <span class="cy">${esc(saved)}</span>`);
-    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> reset  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home</span>`);
+    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> reset  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home  [/?] help</span>`);
     const v = (await waitInput()).trim();
     if (v === '/') return goHome();
+    if (v === '/?') {
+      ln(`  <span class="dm">Server is the hack.chat relay your messages go through.</span>`);
+      ln(`  <span class="dm">Default: hack.chat. Use a custom wss:// URL for self-hosted servers.</span>`);
+      ln(`  <span class="dm">Add /s after URL to save it for next time.</span>`);
+      return await setupServer();
+    }
     if (v === '/r') {
       store.del(K_SRV);
       ln(`  <span class="dm">Reset to hack.chat.</span>`);
@@ -1284,9 +1358,15 @@ async function setupServer() {
     return v || saved;
   } else {
     ln(`  Custom server?`);
-    ln(`  <span class="cy">[Enter]</span> hack.chat  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home</span>`);
+    ln(`  <span class="cy">[Enter]</span> hack.chat  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home  [/?] help</span>`);
     const v = (await waitInput()).trim();
     if (v === '/') return goHome();
+    if (v === '/?') {
+      ln(`  <span class="dm">Server is the hack.chat relay your messages go through.</span>`);
+      ln(`  <span class="dm">Default: hack.chat. Use a custom wss:// URL for self-hosted servers.</span>`);
+      ln(`  <span class="dm">Add /s after URL to save it for next time.</span>`);
+      return await setupServer();
+    }
     if (v.endsWith(' /s')) {
       const s = v.slice(0,-3).trim();
       if (!isValidWsUrl(s)) {
@@ -1308,9 +1388,16 @@ async function setupRoom() {
   ln();
   ln(`  Secret phrase`);
   ln(`  <span class="dm">  use 4+ random words for strong encryption</span>`);
-  ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room  <span class="dm">[/] home</span>`);
+  ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room  <span class="dm">[/] home  [/?] help</span>`);
   const phrase = await waitInput();
   if (phrase.trim() === '/') return goHome();
+  if (phrase.trim() === '/?') {
+    ln(`  <span class="dm">A secret phrase creates an encrypted private room.</span>`);
+    ln(`  <span class="dm">Both sides enter the same phrase → same room, E2E encrypted.</span>`);
+    ln(`  <span class="dm">Empty = public room where you type the room name manually.</span>`);
+    ln(`  <span class="dm">Use 4+ random words for strong security (e.g. "correct horse battery staple").</span>`);
+    return await setupRoom();
+  }
   if (phrase.trim()) {
     curPhrase = phrase;
     ln(`  <span class="dm">Deriving room key...</span>`);
@@ -1339,9 +1426,16 @@ async function setupNick() {
   const saved = store.get(K_NICK);
   if (saved) {
     ln(`  Saved nick: <span class="cy">${esc(saved.split('#')[0])}</span>`);
-    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> forget  <span class="cy">[name /s]</span> save new  <span class="dm">[/] home</span>`);
+    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> forget  <span class="cy">[name /s]</span> save new  <span class="dm">[/] home  [/?] help</span>`);
     const v = (await waitInput()).trim();
     if (v === '/') return goHome();
+    if (v === '/?') {
+      ln(`  <span class="dm">Your nickname is shown next to your messages.</span>`);
+      ln(`  <span class="dm">Add #password for a tripcode — proves identity without registration.</span>`);
+      ln(`  <span class="dm">Example: alice#secret → alice with a unique tripcode hash.</span>`);
+      ln(`  <span class="dm">Add /s after nick to save it for next time. /r to forget.</span>`);
+      return await setupNick();
+    }
     if (v === '/r') {
       store.del(K_NICK);
       ln(`  <span class="dm">Forgot saved nick.</span>`);
@@ -1371,9 +1465,16 @@ async function setupNick() {
 
 async function askNick() {
   ln();
-  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save  <span class="dm">[/] home</span>`);
+  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save  <span class="dm">[/] home  [/?] help</span>`);
   const v = (await waitInput()).trim();
   if (v === '/') return goHome();
+  if (v === '/?') {
+    ln(`  <span class="dm">Your nickname is shown next to your messages.</span>`);
+    ln(`  <span class="dm">Add #password for a tripcode — proves identity without registration.</span>`);
+    ln(`  <span class="dm">Example: alice#secret → alice with a unique tripcode hash.</span>`);
+    ln(`  <span class="dm">Add /s after nick to save it for next time.</span>`);
+    return await askNick();
+  }
   if (v.endsWith(' /s')) {
     const nick = v.slice(0,-3).trim();
     if (!isValidNick(nick)) {
@@ -1451,6 +1552,11 @@ async function handleChat(text) {
     return;
   }
 
+  if (s === '/options') {
+    await showOptions();
+    return;
+  }
+
   if (s === '/save') {
     await saveToVault();
     return;
@@ -1464,6 +1570,26 @@ async function handleChat(text) {
       ln(`  Encryption: ${encOn ? '<span class="gr">ON</span>' : '<span class="yl">OFF</span>'}`);
       updateEncIcon();
     }
+    return;
+  }
+
+  // Emote shortcuts → expand to /me
+  const EMOTES = {
+    '/shrug':  '¯\\_(ツ)_/¯',
+    '/lenny':  '( ͡° ͜ʖ ͡°)',
+    '/flip':   '(╯°□°)╯︵ ┻━┻',
+    '/unflip': '┬─┬ノ( º _ ºノ)',
+    '/hug':    'hugs $1 ⊂(◉‿◉)つ',
+    '/slap':   'slaps $1 with a large trout',
+    '/wave':   'waves at $1 ヾ(＾∇＾)',
+    '/dance':  '♪┏(・o・)┛♪┗(・o・)┓♪',
+  };
+  const emoteMatch = s.match(/^(\/\w+)(?:\s+@?(.+))?$/);
+  if (emoteMatch && EMOTES[emoteMatch[1].toLowerCase()]) {
+    const target = emoteMatch[2] || 'everyone';
+    const template = EMOTES[emoteMatch[1].toLowerCase()].replace('$1', target);
+    const meText = `/me ${template}`;
+    ws?.send(JSON.stringify({ cmd:'chat', text: meText }));
     return;
   }
 
@@ -1684,6 +1810,7 @@ document.addEventListener('visibilitychange', () => {
 // ── Main loop ─────────────────────────────────────────────────────────────────
 async function main() {
   loadSavedTheme();
+  loadSavedFontSize();
   let first = true;
 
   while (true) {
@@ -1698,12 +1825,11 @@ async function main() {
 
     if (first) {
       banner();
-      const stopBoot = startBootSequence();
+      startBootSequence();
       const vaultHint = hasVault() ? `  <span class="cy">[/vault]</span> saved rooms` : '';
       ln(`  <span class="cy">[Enter]</span> start  <span class="cy">[/readme]</span> guide  <span class="cy">[/ghost]</span> stealth`);
       ln(`  <span class="cy">[/options]</span> settings${vaultHint}`);
       const c = (await waitInput()).trim();
-      stopBoot();
 
       if (c === '/readme') {
         readme();
@@ -1715,7 +1841,7 @@ async function main() {
       }
 
       if (c === '/options') {
-        await showThemePicker();
+        await showOptions();
         flushType();
         $out.innerHTML = '';
         first = false;

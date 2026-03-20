@@ -1,4 +1,4 @@
-const VER   = '0.3.3';
+const VER   = '0.4.0';
 const CACHE  = `hc-v${VER}`;
 const FILES  = ['./', './index.html', './manifest.json'];
 
