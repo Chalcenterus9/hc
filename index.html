@@ -233,12 +233,40 @@
       100% { opacity: 0; }
     }
 
+    /* ── Logo canvas ── */
+    .logo-scope {
+      border: 1px solid var(--cy);
+      margin: 0 0 4px;
+      overflow: hidden;
+      position: relative;
+      width: 100%;
+      max-width: 400px;
+      aspect-ratio: 5 / 2;
+    }
+    .logo-scope::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0,0,0,0) 0px, rgba(0,0,0,0) 1px,
+        rgba(0,0,0,0.06) 1px, rgba(0,0,0,0.06) 3px
+      );
+      pointer-events: none;
+    }
+    .logo-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
     /* ── Boot oscilloscope ── */
     .boot-scope {
       border: 1px solid var(--cy);
       margin: 8px 0 4px;
       overflow: hidden;
       opacity: 0.8;
+      max-width: 400px;
     }
     .boot-hdr {
       font-size: 9px;
@@ -290,7 +318,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.1';
+const VER     = '0.4.2';
 const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -299,6 +327,7 @@ const K_VAULT = 'hc_vault';
 const K_VSALT = 'hc_vault_salt';
 const K_THEME = 'hc_theme';
 const K_FONT  = 'hc_font';
+const K_WAKE  = 'hc_wake';
 const NC      = ['cy','yl','mg','rd','bl','gr'];
 
 // ── Themes ────────────────────────────────────────────────────────────────────
@@ -431,17 +460,62 @@ async function showFontPicker() {
   }
 }
 
+// ── Wake lock ─────────────────────────────────────────────────────────────────
+let wakeLock = null;
+let wakeEnabled = false;
+
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    wakeLock = await navigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => { wakeLock = null; });
+  } catch {}
+}
+
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+
+function loadWakeSetting() {
+  wakeEnabled = store.get(K_WAKE) === '1';
+}
+
+async function toggleWake() {
+  wakeEnabled = !wakeEnabled;
+  store.set(K_WAKE, wakeEnabled ? '1' : '0');
+  if (wakeEnabled && mode === 'chat') {
+    await acquireWakeLock();
+  } else {
+    releaseWakeLock();
+  }
+}
+
 // ── Options menu ──────────────────────────────────────────────────────────────
 async function showOptions() {
+  const hasWL = 'wakeLock' in navigator;
   ln();
   ln(`  <span class="cy"><strong>Options</strong></span>`);
   ln(`    <span class="cy">1.</span> Theme`);
   ln(`    <span class="cy">2.</span> Font size`);
+  if (hasWL) {
+    const wSt = wakeEnabled ? '<span class="gr">ON</span>' : '<span class="dm">OFF</span>';
+    ln(`    <span class="cy">3.</span> Keep screen awake  ${wSt}`);
+  }
   ln();
   ln(`  <span class="cy">[number]</span> select  <span class="cy">[Enter]</span> back`);
   const v = (await waitInput()).trim();
   if (v === '1') { await showThemePicker(); return await showOptions(); }
   if (v === '2') { await showFontPicker(); return await showOptions(); }
+  if (v === '3' && hasWL) {
+    await toggleWake();
+    if (wakeEnabled) {
+      ln(`  <span class="gr">✓ Screen will stay awake in chat.</span>`);
+      ln(`  <span class="dm">  hack.chat may disconnect on screen lock — this prevents it.</span>`);
+    } else {
+      ln(`  <span class="dm">Screen wake lock disabled.</span>`);
+    }
+    return await showOptions();
+  }
 }
 
 // Native hack.chat commands — always sent as plaintext, bypass encryption
@@ -1053,19 +1127,99 @@ function notify(who, room, isMention) {
 
 // ── Print screens ─────────────────────────────────────────────────────────────
 function banner() {
-  ln('', false);
-  ln(`<span class="cy"> /\$\$                                        </span>`, false);
-  ln(`<span class="cy">| \$\$                                        </span>`, false);
-  ln(`<span class="cy">| \$\$\$\$\$\$\$   /\$\$\$\$\$\$\$      /\$\$\$\$\$\$  /\$\$   /\$\$</span>`, false);
-  ln(`<span class="cy">| \$\$__  \$\$ /\$\$_____/     /\$\$__  \$\$| \$\$  | \$\$</span>`, false);
-  ln(`<span class="cy">| \$\$  \ \$\$| \$\$          | \$\$  \ \$\$| \$\$  | \$\$</span>`, false);
-  ln(`<span class="cy">| \$\$  | \$\$| \$\$          | \$\$  | \$\$| \$\$  | \$\$</span>`, false);
-  ln(`<span class="cy">| \$\$  | \$\$|  \$\$\$\$\$\$\$ /\$\$| \$\$\$\$\$\$\$/|  \$\$\$\$\$\$\$</span>`, false);
-  ln(`<span class="cy">|__/  |__/ \_______/|__/| \$\$____/  \____  \$\$</span>`, false);
-  ln(`<span class="cy">                        | \$\$       /\$\$  | \$\$</span>`, false);
-  ln(`<span class="cy">                        | \$\$      |  \$\$\$\$\$\$/</span>`, false);
-  ln(`<span class="cy">                        |__/       \______/ </span>`, false);
-  ln('', false);
+  // ── Canvas logo ──
+  const container = document.createElement('div');
+  container.className = 'logo-scope';
+  const canvas = document.createElement('canvas');
+  canvas.className = 'logo-canvas';
+  container.appendChild(canvas);
+  $out.appendChild(container);
+
+  const logoImg = new Image();
+  logoImg.src = './logo.png';
+
+  logoImg.onload = () => {
+    const W = container.clientWidth || 400;
+    const H = container.clientHeight || Math.round(W * 2 / 5);
+    canvas.width = W;
+    canvas.height = H;
+
+    // Get pixel data from offscreen canvas
+    const off = document.createElement('canvas');
+    off.width = W; off.height = H;
+    const offCtx = off.getContext('2d');
+    offCtx.drawImage(logoImg, 0, 0, W, H);
+    const srcData = offCtx.getImageData(0, 0, W, H).data;
+
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const pxSize = 2;
+    const pxGap = 0.5;
+    const threshold = 25;
+    const glitchStrength = 16;
+    const scanArea = 10;
+    let scanY = -scanArea;
+    let running = true;
+
+    function themeColor(v) {
+      return getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+    }
+
+    function hexToRGB(hex) {
+      hex = hex.replace('#', '');
+      if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+      return [parseInt(hex.slice(0,2),16), parseInt(hex.slice(2,4),16), parseInt(hex.slice(4,6),16)];
+    }
+
+    function draw() {
+      if (!running || !canvas.isConnected) { running = false; return; }
+
+      const bg = themeColor('--bg') || '#212834';
+      const cy = themeColor('--cy') || '#4ec9b0';
+      const [cr, cg, cb] = hexToRGB(cy);
+
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
+      for (let y = 0; y < H; y += pxSize) {
+        const distScan = Math.abs(y - scanY);
+        const inGlitch = distScan < scanArea;
+
+        for (let x = 0; x < W; x += pxSize) {
+          const i = (y * W + x) * 4;
+          const bright = srcData[i] * 0.299 + srcData[i+1] * 0.587 + srcData[i+2] * 0.114;
+
+          if (bright > threshold) {
+            const a = Math.min(1, bright / 255);
+            let dx = x;
+
+            if (inGlitch) {
+              const intensity = 1 - distScan / scanArea;
+              dx += (Math.random() - 0.5) * glitchStrength * intensity;
+              const boost = Math.min(1, a + 0.15);
+              ctx.fillStyle = `rgba(${cr},${cg},${cb},${boost})`;
+            } else {
+              ctx.fillStyle = `rgba(${cr},${cg},${cb},${a})`;
+            }
+            ctx.fillRect(dx, y, pxSize - pxGap, pxSize - pxGap);
+          }
+        }
+      }
+
+      scanY += 0.8;
+      if (scanY > H + scanArea) scanY = -scanArea;
+      requestAnimationFrame(draw);
+    }
+
+    draw();
+  };
+
+  logoImg.onerror = () => {
+    // Fallback: ASCII banner
+    container.remove();
+    ln(`<span class="cy">  hc.py</span>`, false);
+  };
+
+  ln();
   ln(`  <span class="dm">v${VER} · ${DATE} · tiny hack.chat client</span>`);
   ln(`  <span class="dm">by </span><strong>Chalcenterus9</strong><span class="dm"> & </span><strong>Claude AI</strong><span class="dm">  ·  MIT License</span>`);
   ln(`  <span class="dm">E2E encryption · PBKDF2 rooms · markdown · self-hosted</span>`);
@@ -1503,6 +1657,8 @@ async function nuke() {
     localStorage.removeItem(K_VAULT);
     localStorage.removeItem(K_VSALT);
     localStorage.removeItem(K_THEME);
+    localStorage.removeItem(K_FONT);
+    localStorage.removeItem(K_WAKE);
     flushType();
     $out.innerHTML = '';
     ln(`  <span class="dm">All data wiped. Reloading...</span>`);
@@ -1790,6 +1946,7 @@ function connectChat(server, room, nick) {
       requestAnimationFrame(() => { $out.scrollTop = $out.scrollHeight; });
       $inp.focus();
       askNotif();
+      if (wakeEnabled) acquireWakeLock();
     };
 
     ws.onerror = () => {
@@ -1813,6 +1970,8 @@ function connectChat(server, room, nick) {
 // ── Visibility change: reconnect when returning from background ───────────────
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && mode === 'chat') {
+    // Re-acquire wake lock (iOS releases it on background)
+    if (wakeEnabled) acquireWakeLock();
     // Check if WebSocket is dead
     if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
       cancelReconnect();
@@ -1826,6 +1985,7 @@ document.addEventListener('visibilitychange', () => {
 async function main() {
   loadSavedTheme();
   loadSavedFontSize();
+  loadWakeSetting();
   let first = true;
 
   while (true) {
