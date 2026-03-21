@@ -318,7 +318,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.2';
+const VER     = '0.4.3';
 const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -604,8 +604,9 @@ function flushType() {
   typing = false;
 }
 
-function print(html, typed = false) {
+function print(html, typed = false, forceScroll = true) {
   const atBottom = $out.scrollTop + $out.clientHeight >= $out.scrollHeight - 10;
+  const shouldScroll = forceScroll || atBottom;
   const s = document.createElement('span');
   s.className = 'ln';
   s.innerHTML = html;
@@ -626,20 +627,20 @@ function print(html, typed = false) {
     if (!totalText.trim()) {
       nodes.forEach(n => n.node.textContent = n.full);
       $out.appendChild(s);
-      if (atBottom) $out.scrollTop = $out.scrollHeight;
+      if (shouldScroll) $out.scrollTop = $out.scrollHeight;
       return;
     }
 
     $out.appendChild(s);
-    if (atBottom) $out.scrollTop = $out.scrollHeight;
+    if (shouldScroll) $out.scrollTop = $out.scrollHeight;
 
     if (nodes.length > 0) {
-      typeQueue.push({ nodes });
+      typeQueue.push({ nodes, forceScroll: shouldScroll });
       if (!typing) processTypeQueue();
     }
   } else {
     $out.appendChild(s);
-    if (atBottom) $out.scrollTop = $out.scrollHeight;
+    if (shouldScroll) $out.scrollTop = $out.scrollHeight;
   }
 }
 
@@ -653,7 +654,7 @@ function processTypeQueue() {
   }
 
   typing = true;
-  const { nodes } = typeQueue.shift();
+  const { nodes, forceScroll } = typeQueue.shift();
 
   // Build flat char list across all text nodes
   const chars = [];
@@ -679,12 +680,12 @@ function processTypeQueue() {
       chars[i].node.textContent += chars[i].ch;
     }
     const atBot = $out.scrollTop + $out.clientHeight >= $out.scrollHeight - 10;
-    if (atBot) $out.scrollTop = $out.scrollHeight;
+    if (forceScroll || atBot) $out.scrollTop = $out.scrollHeight;
   }, interval);
   typeTimer = timer;
 }
 
-const ln = (h = '', typed = true) => print(h + '\n', typed);
+const ln = (h = '', typed = true, forceScroll = true) => print(h + '\n', typed, forceScroll);
 
 function ts() {
   const n = new Date();
@@ -1851,7 +1852,7 @@ async function handleWsMessage({ data }) {
 
     const trip = d.trip ? ` <span class="dm">(${esc(d.trip)})</span>` : '';
     const isOwn = who === curNick;
-    ln(`${ts()} <span class="${nickCls(who)}"><strong>${esc(who)}</strong></span>${trip}: ${text}`, !isOwn);
+    ln(`${ts()} <span class="${nickCls(who)}"><strong>${esc(who)}</strong></span>${trip}: ${text}`, !isOwn, isOwn || wasAtBottom);
 
     if (isOwn) {
       // Always scroll to own message
@@ -2117,26 +2118,48 @@ if ('serviceWorker' in navigator) {
 (function() {
   const $app = document.getElementById('app');
 
+  function resetViewport() {
+    $app.style.height = '';
+    $app.style.top = '';
+  }
+
   if (window.visualViewport) {
     const vv = window.visualViewport;
 
     function onViewportResize() {
-      // Set app height to visual viewport (excludes keyboard)
-      $app.style.height = vv.height + 'px';
-      // Compensate for any offset (iOS scrolls the page up)
-      $app.style.top = vv.offsetTop + 'px';
-      // Force scroll to bottom of output when keyboard appears
-      requestAnimationFrame(() => {
-        $out.scrollTop = $out.scrollHeight;
-      });
+      // Detect if keyboard is open: visual viewport significantly shorter than window
+      const keyboardOpen = vv.height < window.innerHeight - 50;
+      if (keyboardOpen) {
+        $app.style.height = vv.height + 'px';
+        $app.style.top = vv.offsetTop + 'px';
+        requestAnimationFrame(() => {
+          $out.scrollTop = $out.scrollHeight;
+        });
+      } else {
+        resetViewport();
+      }
     }
 
     vv.addEventListener('resize', onViewportResize);
     vv.addEventListener('scroll', () => {
-      // Prevent iOS from scrolling the fixed layout
-      $app.style.top = vv.offsetTop + 'px';
+      // Only compensate offset when keyboard is actually open
+      if (vv.height < window.innerHeight - 50) {
+        $app.style.top = vv.offsetTop + 'px';
+      }
     });
   }
+
+  // Reset layout when input loses focus (keyboard closing)
+  $inp.addEventListener('blur', () => {
+    setTimeout(resetViewport, 100);
+  });
+
+  // Reset layout when returning from background / external link
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      resetViewport();
+    }
+  });
 
   // Prevent body scroll on iOS
   document.body.addEventListener('touchmove', e => {
