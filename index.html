@@ -318,7 +318,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.4';
+const VER     = '0.4.5';
 const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -2119,16 +2119,17 @@ if ('serviceWorker' in navigator) {
   const $app = document.getElementById('app');
 
   function resetViewport() {
-    $app.style.height = '';
-    $app.style.top = '';
+    $app.style.height = '100dvh';
+    $app.style.top = '0px';
   }
 
   if (window.visualViewport) {
     const vv = window.visualViewport;
 
     function onViewportResize() {
-      // Detect if keyboard is open: visual viewport significantly shorter than window
-      const keyboardOpen = vv.height < window.innerHeight - 50;
+      // Only adjust for keyboard when input is actually focused
+      const keyboardOpen = vv.height < window.innerHeight - 50
+                           && document.activeElement === $inp;
       if (keyboardOpen) {
         $app.style.height = vv.height + 'px';
         $app.style.top = vv.offsetTop + 'px';
@@ -2142,15 +2143,13 @@ if ('serviceWorker' in navigator) {
 
     vv.addEventListener('resize', onViewportResize);
     vv.addEventListener('scroll', () => {
-      // Only compensate offset when keyboard is actually open
-      if (vv.height < window.innerHeight - 50) {
+      if (document.activeElement === $inp && vv.height < window.innerHeight - 50) {
         $app.style.top = vv.offsetTop + 'px';
       }
     });
   }
 
   // Reset layout when input loses focus (keyboard closing)
-  // Guard: only reset if input is still unfocused after delay
   $inp.addEventListener('blur', () => {
     setTimeout(() => {
       if (document.activeElement !== $inp) resetViewport();
@@ -2161,10 +2160,15 @@ if ('serviceWorker' in navigator) {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       resetViewport();
-      // Re-enable input interaction after iOS PWA resume
-      $inp.disabled = true;
-      requestAnimationFrame(() => { $inp.disabled = false; });
+      // Delayed resets — iOS may recalculate viewport late
+      setTimeout(resetViewport, 300);
+      setTimeout(resetViewport, 1000);
     }
+  });
+
+  // Also catch bfcache restoration (iOS in-app browser back)
+  window.addEventListener('pageshow', () => {
+    resetViewport();
   });
 
   // Prevent body scroll on iOS
