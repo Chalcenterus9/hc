@@ -318,7 +318,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.5';
+const VER     = '0.4.6';
 const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -2156,17 +2156,31 @@ if ('serviceWorker' in navigator) {
     }, 200);
   });
 
-  // Reset layout when returning from background / external link
+  // Reset on window focus — catches return from in-app browser overlay
+  window.addEventListener('focus', () => {
+    resetViewport();
+    setTimeout(resetViewport, 300);
+  });
+
+  // Reset layout when returning from background
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       resetViewport();
-      // Delayed resets — iOS may recalculate viewport late
       setTimeout(resetViewport, 300);
       setTimeout(resetViewport, 1000);
     }
   });
 
-  // Also catch bfcache restoration (iOS in-app browser back)
+  // Safety net: on first touch, check if layout is broken and fix
+  $app.addEventListener('touchstart', () => {
+    const rect = $app.getBoundingClientRect();
+    if (rect.height < window.innerHeight * 0.6) {
+      // Layout is clearly broken — app is much shorter than screen
+      resetViewport();
+    }
+  }, { passive: true });
+
+  // Also catch bfcache restoration
   window.addEventListener('pageshow', () => {
     resetViewport();
   });
