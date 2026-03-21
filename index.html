@@ -121,7 +121,7 @@
     #pr { color: var(--cy); user-select: none; flex-shrink: 0; }
 
     #inp {
-      flex: 1;
+      width: 100%;
       background: none;
       border: none;
       outline: none;
@@ -131,6 +131,9 @@
       line-height: inherit;
       caret-color: var(--cy);
       min-width: 0;
+      position: relative;
+      z-index: 1;
+      padding: 0;
     }
 
     /* color classes */
@@ -292,6 +295,77 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
+
+    /* ── Tappable setup items ── */
+    .tap {
+      cursor: pointer;
+      border-bottom: 1px dashed rgba(128,128,128,0.3);
+      transition: background 0.1s;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+    .tap:active { background: var(--hy); }
+
+    /* ── Popup layer (links, mentions) ── */
+    #popup {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      background: var(--hdr);
+      border-top: 1px solid rgba(128,128,128,0.2);
+      flex-shrink: 0;
+      font-size: 11px;
+      overflow-x: auto;
+      white-space: nowrap;
+      -webkit-overflow-scrolling: touch;
+    }
+    #popup.visible { display: flex; }
+    #popup .pk { cursor: pointer; padding: 2px 6px; border: 1px solid rgba(128,128,128,0.3); border-radius: 3px; flex-shrink: 0; }
+    #popup .pk:active { background: var(--hy); }
+    #popup .pu { color: var(--bl); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
+
+    /* ── Ghost autocomplete ── */
+    #inp-wrap {
+      flex: 1;
+      position: relative;
+      min-width: 0;
+    }
+    #ghost {
+      position: absolute;
+      top: 0; left: 0;
+      color: var(--dm);
+      opacity: 0.4;
+      font-family: inherit;
+      font-size: 16px;
+      line-height: inherit;
+      pointer-events: none;
+      white-space: pre;
+      user-select: none;
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--hdr);
+      color: var(--gr);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 14px;
+      border-radius: 4px;
+      border: 1px solid rgba(128,128,128,0.2);
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      z-index: 100;
+      pointer-events: none;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
   </style>
 </head>
 <body>
@@ -305,21 +379,26 @@
   <div id="update-bar" onclick="location.reload()">⟳ Update available — tap to reload</div>
   <div id="out"></div>
   <div id="new-msg" onclick="scrollToBottom()">↓ new messages</div>
+  <div id="popup"></div>
   <div id="bar">
     <span id="pr">›</span>
-    <input id="inp" type="text"
-           autocomplete="off" autocorrect="off"
-           autocapitalize="off" spellcheck="false"
-           enterkeyhint="send">
+    <div id="inp-wrap">
+      <input id="inp" type="text"
+             autocomplete="off" autocorrect="off"
+             autocapitalize="off" spellcheck="false"
+             enterkeyhint="send">
+      <span id="ghost"></span>
+    </div>
   </div>
 </div>
+<div id="toast"></div>
 <div id="crt-overlay"></div>
 <script>
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.6';
-const DATE    = '21.03.2026';
+const VER     = '0.5.0';
+const DATE    = '22.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
 const K_NICK  = 'hc_nick';
@@ -328,7 +407,12 @@ const K_VSALT = 'hc_vault_salt';
 const K_THEME = 'hc_theme';
 const K_FONT  = 'hc_font';
 const K_WAKE  = 'hc_wake';
+const K_LOGO  = 'hc_logo';
 const NC      = ['cy','yl','mg','rd','bl','gr'];
+
+// ── iOS PWA detection ─────────────────────────────────────────────────────────
+const isIOSPWA = window.navigator.standalone === true
+  && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
 // ── Themes ────────────────────────────────────────────────────────────────────
 const THEMES = {
@@ -407,10 +491,10 @@ async function showThemePicker() {
   names.forEach((k, i) => {
     const t = THEMES[k];
     const mark = k === current ? ' <span class="gr">◄</span>' : '';
-    ln(`    <span class="cy">${i + 1}.</span> ${t.label}${mark}`);
+    ln(`    ${tap(String(i + 1), `[${i + 1}]`, t.label)}${mark}`);
   });
   ln();
-  ln(`  <span class="cy">[number]</span> select  <span class="cy">[Enter]</span> cancel`);
+  ln(`  ${tap('', '[Enter]', 'cancel')}`);
   const v = (await waitInput()).trim();
   const n = parseInt(v);
   if (n >= 1 && n <= names.length) {
@@ -437,7 +521,7 @@ async function showFontPicker() {
   const cur = parseInt(store.get(K_FONT) || '10');
   ln();
   ln(`  <span class="cy">Font size:</span> ${cur}px`);
-  ln(`  <span class="cy">[+]</span> bigger  <span class="cy">[-]</span> smaller  <span class="cy">[10-16]</span> set  <span class="cy">[Enter]</span> done`);
+  ln(`  ${tap('+', '[+]', 'bigger')}  ${tap('-', '[-]', 'smaller')}  <span class="cy">[10-16]</span> set  ${tap('', '[Enter]', 'done')}`);
   while (true) {
     const v = (await waitInput()).trim();
     if (!v) return;
@@ -490,23 +574,66 @@ async function toggleWake() {
   }
 }
 
+// ── Logo picker ───────────────────────────────────────────────────────────────
+async function showLogoPicker() {
+  const cur = store.get(K_LOGO) || '1';
+  ln();
+  ln(`  <span class="cy">Logo:</span> current = ${cur}`);
+  // Render both logos as small canvases
+  for (const n of ['1', '2']) {
+    const wrap = document.createElement('div');
+    wrap.className = 'logo-scope';
+    wrap.style.maxWidth = '200px';
+    wrap.style.margin = '4px 0';
+    const cv = document.createElement('canvas');
+    cv.className = 'logo-canvas';
+    wrap.appendChild(cv);
+    $out.appendChild(wrap);
+
+    const img = new Image();
+    img.src = `./logo-${n}.png`;
+    img.onload = () => {
+      const W = wrap.clientWidth || 200;
+      const H = wrap.clientHeight || Math.round(W * 2 / 5);
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      ctx.drawImage(img, 0, 0, W, H);
+    };
+    const mark = n === cur ? ' <span class="gr">◄</span>' : '';
+    ln(`    ${tap(n, `[${n}]`)}${mark}`);
+  }
+  ln();
+  ln(`  ${tap('', '[Enter]', 'cancel')}`);
+  const v = (await waitInput()).trim();
+  if (v === '1' || v === '2') {
+    store.set(K_LOGO, v);
+    ln(`  <span class="gr">✓ Logo ${v} — visible on next launch.</span>`);
+  } else {
+    ln(`  <span class="dm">Cancelled.</span>`);
+  }
+}
+
 // ── Options menu ──────────────────────────────────────────────────────────────
 async function showOptions() {
   const hasWL = 'wakeLock' in navigator;
   ln();
   ln(`  <span class="cy"><strong>Options</strong></span>`);
-  ln(`    <span class="cy">1.</span> Theme`);
-  ln(`    <span class="cy">2.</span> Font size`);
+  ln(`    ${tap('1', '[1]', 'Theme')}`);
+  ln(`    ${tap('2', '[2]', 'Font size')}`);
+  let nextN = 3;
   if (hasWL) {
     const wSt = wakeEnabled ? '<span class="gr">ON</span>' : '<span class="dm">OFF</span>';
-    ln(`    <span class="cy">3.</span> Keep screen awake  ${wSt}`);
+    ln(`    ${tap(String(nextN), `[${nextN}]`, `Keep screen awake  ${wSt}`)}`);
+    nextN++;
   }
+  ln(`    ${tap(String(nextN), `[${nextN}]`, 'Logo')}`);
+  const logoN = nextN;
   ln();
-  ln(`  <span class="cy">[number]</span> select  <span class="cy">[Enter]</span> back`);
+  ln(`  ${tap('', '[Enter]', 'back')}`);
   const v = (await waitInput()).trim();
   if (v === '1') { await showThemePicker(); return await showOptions(); }
   if (v === '2') { await showFontPicker(); return await showOptions(); }
-  if (v === '3' && hasWL) {
+  if (hasWL && v === '3') {
     await toggleWake();
     if (wakeEnabled) {
       ln(`  <span class="gr">✓ Screen will stay awake in chat.</span>`);
@@ -516,6 +643,7 @@ async function showOptions() {
     }
     return await showOptions();
   }
+  if (v === String(logoN)) { await showLogoPicker(); return await showOptions(); }
 }
 
 // Native hack.chat commands — always sent as plaintext, bypass encryption
@@ -564,6 +692,9 @@ const $hdrUsers  = document.getElementById('hdr-users');
 const $hdrReconn = document.getElementById('hdr-reconn');
 const $updateBar = document.getElementById('update-bar');
 const $newMsg    = document.getElementById('new-msg');
+const $popup     = document.getElementById('popup');
+const $ghost     = document.getElementById('ghost');
+const $toast     = document.getElementById('toast');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let mode         = 'setup';  // 'setup' | 'chat'
@@ -767,7 +898,23 @@ function updateUsersCount() {
 const waitInput = () => new Promise(r => { resolveInput = r; });
 
 $inp.addEventListener('keydown', e => {
+  // Tab: accept ghost autocomplete
+  if (e.key === 'Tab' && $ghost.dataset.full) {
+    e.preventDefault();
+    $inp.value = $ghost.dataset.full;
+    $ghost.innerHTML = '';
+    $ghost.dataset.full = '';
+    return;
+  }
+  // Escape: close popup
+  if (e.key === 'Escape') {
+    hidePopup();
+    return;
+  }
   if (e.key !== 'Enter') return;
+  hidePopup();
+  $ghost.innerHTML = '';
+  $ghost.dataset.full = '';
   const v = $inp.value;
   $inp.value = '';
 
@@ -781,8 +928,194 @@ $inp.addEventListener('keydown', e => {
   }
 });
 
-// Tap anywhere on output to focus input (mobile)
-$out.addEventListener('click', () => $inp.focus());
+// ── Tap helper (clickable setup items) ────────────────────────────────────────
+function tap(cmd, label, desc) {
+  const d = desc ? ' ' + desc : '';
+  return `<span class="tap" data-cmd="${esc(cmd)}"><span class="cy">${label}</span>${d}</span>`;
+}
+
+function triggerInput(cmd) {
+  $inp.value = cmd;
+  $inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+}
+
+// ── Output click delegation (tap items, iOS links, focus) ─────────────────────
+$out.addEventListener('click', e => {
+  // Tappable items
+  const t = e.target.closest('.tap');
+  if (t) {
+    e.preventDefault();
+    e.stopPropagation();
+    triggerInput(t.dataset.cmd || '');
+    return;
+  }
+
+  // iOS PWA: intercept link clicks → show popup
+  if (isIOSPWA) {
+    const a = e.target.closest('a[href]');
+    if (a) {
+      e.preventDefault();
+      e.stopPropagation();
+      showLinkPopup(a.href);
+      return;
+    }
+  }
+
+  $inp.focus();
+});
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(text, ms = 1500) {
+  $toast.textContent = text;
+  $toast.classList.add('show');
+  setTimeout(() => $toast.classList.remove('show'), ms);
+}
+
+// ── Popup layer ───────────────────────────────────────────────────────────────
+let popupMode = null; // 'link' | 'mention' | null
+
+function hidePopup() {
+  $popup.classList.remove('visible');
+  $popup.innerHTML = '';
+  popupMode = null;
+}
+
+// ── iOS link popup ────────────────────────────────────────────────────────────
+function showLinkPopup(url) {
+  hidePopup();
+  popupMode = 'link';
+  const short = url.length > 40 ? url.slice(0, 40) + '…' : url;
+
+  let html = '';
+  if (navigator.share) {
+    html += `<span class="pk cy" data-act="share">[o]pen in…</span>`;
+  }
+  html += `<span class="pk cy" data-act="copy">[c]opy</span>`;
+  html += `<span class="pu">${esc(short)}</span>`;
+
+  $popup.innerHTML = html;
+  $popup.dataset.url = url;
+  $popup.classList.add('visible');
+
+  // Keyboard shortcuts while popup open
+  const onKey = (e) => {
+    if (popupMode !== 'link') { document.removeEventListener('keydown', onKey); return; }
+    if (e.key === 'o' && navigator.share) {
+      e.preventDefault();
+      doLinkAction('share', url);
+      document.removeEventListener('keydown', onKey);
+    } else if (e.key === 'c') {
+      e.preventDefault();
+      doLinkAction('copy', url);
+      document.removeEventListener('keydown', onKey);
+    } else if (e.key === 'Escape') {
+      hidePopup();
+      document.removeEventListener('keydown', onKey);
+    }
+  };
+  document.addEventListener('keydown', onKey);
+}
+
+async function doLinkAction(act, url) {
+  if (act === 'share') {
+    try { await navigator.share({ url }); } catch {}
+  } else if (act === 'copy') {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('URL copied');
+    } catch {}
+  }
+  hidePopup();
+}
+
+$popup.addEventListener('click', e => {
+  const pk = e.target.closest('.pk');
+  if (!pk) return;
+  const act = pk.dataset.act;
+  if (popupMode === 'link' && act) {
+    doLinkAction(act, $popup.dataset.url);
+  } else if (popupMode === 'mention') {
+    const nick = pk.dataset.nick;
+    if (nick) insertMention(nick);
+  }
+});
+
+// Close popup on outside tap
+document.addEventListener('click', e => {
+  if (popupMode && !$popup.contains(e.target) && !$out.contains(e.target)) {
+    hidePopup();
+  }
+});
+
+// ── Ghost autocomplete ────────────────────────────────────────────────────────
+const CMDS_CHAT = [
+  '/enc', '/fp', '/options', '/theme', '/save', '/quit', '/exit', '/nuke',
+  '/clear', '/room', '/who', '/dm', '/me', '/format', '/readme', '/help',
+  '/shrug', '/lenny', '/flip', '/unflip', '/hug', '/slap', '/wave', '/dance',
+  '/whisper', '/nick', '/move', '/ignore', '/unignore',
+];
+const CMDS_SETUP = ['/readme', '/ghost', '/vault', '/options', '/nuke', '/?', '/r'];
+
+function updateGhost() {
+  const v = $inp.value;
+  if (!v || !v.startsWith('/')) {
+    $ghost.innerHTML = '';
+    $ghost.dataset.full = '';
+    return;
+  }
+  const cmds = mode === 'chat' ? CMDS_CHAT : CMDS_SETUP;
+  const match = cmds.find(c => c.startsWith(v) && c !== v);
+  if (match) {
+    // Hidden span takes same width as typed text, remainder is visible
+    $ghost.innerHTML = `<span style="visibility:hidden">${esc(v)}</span>${esc(match.slice(v.length))}`;
+    $ghost.dataset.full = match;
+  } else {
+    $ghost.innerHTML = '';
+    $ghost.dataset.full = '';
+  }
+}
+
+$inp.addEventListener('input', () => {
+  updateGhost();
+  updateMentionPicker();
+});
+
+// ── Mention picker ────────────────────────────────────────────────────────────
+function updateMentionPicker() {
+  const v = $inp.value;
+  const atIdx = v.lastIndexOf('@');
+
+  // Don't show picker if @ is not at start or after a space
+  if (atIdx < 0 || (atIdx > 0 && v[atIdx - 1] !== ' ') || mode !== 'chat') {
+    if (popupMode === 'mention') hidePopup();
+    return;
+  }
+
+  const query = v.slice(atIdx + 1).toLowerCase();
+  const nicks = ['all', ...[...users].filter(n => n !== curNick).sort()];
+  const filtered = query ? nicks.filter(n => n.toLowerCase().startsWith(query)) : nicks;
+
+  if (filtered.length === 0) {
+    if (popupMode === 'mention') hidePopup();
+    return;
+  }
+
+  popupMode = 'mention';
+  $popup.innerHTML = filtered.map(n =>
+    `<span class="pk ${n === 'all' ? 'yl' : 'cy'}" data-nick="${esc(n)}">@${esc(n)}</span>`
+  ).join('');
+  $popup.classList.add('visible');
+}
+
+function insertMention(nick) {
+  const v = $inp.value;
+  const atIdx = v.lastIndexOf('@');
+  if (atIdx >= 0) {
+    $inp.value = v.slice(0, atIdx) + '@' + nick + ' ';
+  }
+  hidePopup();
+  $inp.focus();
+}
 
 // Auto-focus on load
 window.addEventListener('load', () => $inp.focus());
@@ -975,7 +1308,7 @@ async function showVaultAndPick() {
     ln(`    <span class="cy">${i + 1}.</span> ${label}${srv}  <span class="dm">as</span> ${esc(r.nick.split('#')[0])}`);
   });
   ln();
-  ln(`  <span class="cy">[number]</span> connect  <span class="cy">[Enter]</span> cancel  <span class="cy">[/del N]</span> remove`);
+  ln(`  <span class="cy">[number]</span> connect  ${tap('', '[Enter]', 'cancel')}  <span class="cy">[/del N]</span> remove`);
   while (true) {
     const cmd = (await waitInput()).trim();
     if (!cmd) return null;
@@ -1137,7 +1470,8 @@ function banner() {
   $out.appendChild(container);
 
   const logoImg = new Image();
-  logoImg.src = './logo.png';
+  const logoN = store.get(K_LOGO) || '1';
+  logoImg.src = `./logo-${logoN}.png`;
 
   logoImg.onload = () => {
     const W = container.clientWidth || 400;
@@ -1431,7 +1765,7 @@ function readme() {
   ln(`    Install: "Add to Home Screen" in your browser`);
   ln();
   ln(`  <span class="dm">════════════════════</span>`);
-  if (mode === 'setup') ln(`  <span class="dm">[Enter]</span> back to start`);
+  if (mode === 'setup') ln(`  ${tap('', '<span class="dm">[Enter]</span>', '<span class="dm">back to start</span>')}`);
   ln();
 }
 
@@ -1483,7 +1817,7 @@ async function setupServer() {
   const saved = store.get(K_SRV);
   if (saved) {
     ln(`  Saved server: <span class="cy">${esc(saved)}</span>`);
-    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> reset  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home  [/?] help</span>`);
+    ln(`  ${tap('', '[Enter]', 'use')}  ${tap('/r', '[/r]', 'reset')}  <span class="cy">[url /s]</span> save new  ${tap('/', '<span class="dm">[/]</span>', '<span class="dm">home</span>')}  ${tap('/?', '<span class="dm">[/?]</span>', '<span class="dm">help</span>')}`);
     const v = (await waitInput()).trim();
     if (v === '/') return goHome();
     if (v === '/?') {
@@ -1513,7 +1847,7 @@ async function setupServer() {
     return v || saved;
   } else {
     ln(`  Custom server?`);
-    ln(`  <span class="cy">[Enter]</span> hack.chat  <span class="cy">[url /s]</span> save new  <span class="dm">[/] home  [/?] help</span>`);
+    ln(`  ${tap('', '[Enter]', 'hack.chat')}  <span class="cy">[url /s]</span> save new  ${tap('/', '<span class="dm">[/]</span>', '<span class="dm">home</span>')}  ${tap('/?', '<span class="dm">[/?]</span>', '<span class="dm">help</span>')}`);
     const v = (await waitInput()).trim();
     if (v === '/') return goHome();
     if (v === '/?') {
@@ -1543,7 +1877,7 @@ async function setupRoom() {
   ln();
   ln(`  Secret phrase`);
   ln(`  <span class="dm">  use 4+ random words for strong encryption</span>`);
-  ln(`  <span class="cy">[Enter]</span> public room  <span class="cy">[phrase]</span> private room  <span class="dm">[/] home  [/?] help</span>`);
+  ln(`  ${tap('', '[Enter]', 'public room')}  <span class="cy">[phrase]</span> private room  ${tap('/', '<span class="dm">[/]</span>', '<span class="dm">home</span>')}  ${tap('/?', '<span class="dm">[/?]</span>', '<span class="dm">help</span>')}`);
   const phrase = await waitInput();
   if (phrase.trim() === '/') return goHome();
   if (phrase.trim() === '/?') {
@@ -1563,7 +1897,7 @@ async function setupRoom() {
     return h;
   } else {
     curPhrase = '';
-    ln(`  Room name  <span class="dm">[/] home</span>`);
+    ln(`  Room name  ${tap('/', '<span class="dm">[/]</span>', '<span class="dm">home</span>')}`);
     let r;
     while (true) {
       r = (await waitInput()).trim();
@@ -1581,7 +1915,7 @@ async function setupNick() {
   const saved = store.get(K_NICK);
   if (saved) {
     ln(`  Saved nick: <span class="cy">${esc(saved.split('#')[0])}</span>`);
-    ln(`  <span class="cy">[Enter]</span> use  <span class="cy">[/r]</span> forget  <span class="cy">[name /s]</span> save new  <span class="dm">[/] home  [/?] help</span>`);
+    ln(`  ${tap('', '[Enter]', 'use')}  ${tap('/r', '[/r]', 'forget')}  <span class="cy">[name /s]</span> save new  ${tap('/', '<span class="dm">[/]</span>', '<span class="dm">home</span>')}  ${tap('/?', '<span class="dm">[/?]</span>', '<span class="dm">help</span>')}`);
     const v = (await waitInput()).trim();
     if (v === '/') return goHome();
     if (v === '/?') {
@@ -1620,7 +1954,7 @@ async function setupNick() {
 
 async function askNick() {
   ln();
-  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save  <span class="dm">[/] home  [/?] help</span>`);
+  ln(`  Nickname (or nick#password)  <span class="cy">[/s]</span> to save  ${tap('/', '<span class="dm">[/]</span>', '<span class="dm">home</span>')}  ${tap('/?', '<span class="dm">[/?]</span>', '<span class="dm">help</span>')}`);
   const v = (await waitInput()).trim();
   if (v === '/') return goHome();
   if (v === '/?') {
@@ -2002,9 +2336,9 @@ async function main() {
     if (first) {
       banner();
       startBootSequence();
-      const vaultHint = hasVault() ? `  <span class="cy">[/vault]</span> saved rooms` : '';
-      ln(`  <span class="cy">[Enter]</span> start  <span class="cy">[/readme]</span> guide  <span class="cy">[/ghost]</span> stealth`);
-      ln(`  <span class="cy">[/options]</span> settings${vaultHint}`);
+      const vaultHint = hasVault() ? `  ${tap('/vault', '[/vault]', 'saved rooms')}` : '';
+      ln(`  ${tap('', '[Enter]', 'start')}  ${tap('/readme', '[/readme]', 'guide')}  ${tap('/ghost', '[/ghost]', 'stealth')}`);
+      ln(`  ${tap('/options', '[/options]', 'settings')}${vaultHint}`);
       const c = (await waitInput()).trim();
 
       if (c === '/readme') {
@@ -2170,15 +2504,6 @@ if ('serviceWorker' in navigator) {
       setTimeout(resetViewport, 1000);
     }
   });
-
-  // Safety net: on first touch, check if layout is broken and fix
-  $app.addEventListener('touchstart', () => {
-    const rect = $app.getBoundingClientRect();
-    if (rect.height < window.innerHeight * 0.6) {
-      // Layout is clearly broken — app is much shorter than screen
-      resetViewport();
-    }
-  }, { passive: true });
 
   // Also catch bfcache restoration
   window.addEventListener('pageshow', () => {

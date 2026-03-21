@@ -1,6 +1,6 @@
-const VER   = '0.4.6';
+const VER   = '0.5.0';
 const CACHE  = `hc-v${VER}`;
-const FILES  = ['./', './index.html', './manifest.json', './logo.png'];
+const FILES  = ['./', './index.html', './manifest.json', './logo-1.png', './logo-2.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
