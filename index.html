@@ -318,7 +318,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.4.3';
+const VER     = '0.4.4';
 const DATE    = '21.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -1431,7 +1431,7 @@ function readme() {
   ln(`    Install: "Add to Home Screen" in your browser`);
   ln();
   ln(`  <span class="dm">════════════════════</span>`);
-  ln(`  <span class="dm">[Enter]</span> back to start`);
+  if (mode === 'setup') ln(`  <span class="dm">[Enter]</span> back to start`);
   ln();
 }
 
@@ -2150,14 +2150,20 @@ if ('serviceWorker' in navigator) {
   }
 
   // Reset layout when input loses focus (keyboard closing)
+  // Guard: only reset if input is still unfocused after delay
   $inp.addEventListener('blur', () => {
-    setTimeout(resetViewport, 100);
+    setTimeout(() => {
+      if (document.activeElement !== $inp) resetViewport();
+    }, 200);
   });
 
   // Reset layout when returning from background / external link
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       resetViewport();
+      // Re-enable input interaction after iOS PWA resume
+      $inp.disabled = true;
+      requestAnimationFrame(() => { $inp.disabled = false; });
     }
   });
 
