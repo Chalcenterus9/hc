@@ -397,7 +397,7 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const VER     = '0.5.0';
+const VER     = '0.5.1';
 const DATE    = '22.03.2026';
 const DEF_SRV = 'wss://hack.chat/chat-ws';
 const K_SRV   = 'hc_server';
@@ -1066,8 +1066,8 @@ function updateGhost() {
   const cmds = mode === 'chat' ? CMDS_CHAT : CMDS_SETUP;
   const match = cmds.find(c => c.startsWith(v) && c !== v);
   if (match) {
-    // Hidden span takes same width as typed text, remainder is visible
-    $ghost.innerHTML = `<span style="visibility:hidden">${esc(v)}</span>${esc(match.slice(v.length))}`;
+    // Hidden span takes same width as typed text, tappable remainder visible
+    $ghost.innerHTML = `<span style="visibility:hidden">${esc(v)}</span><span style="pointer-events:auto;cursor:pointer" class="ghost-complete">${esc(match.slice(v.length))}</span>`;
     $ghost.dataset.full = match;
   } else {
     $ghost.innerHTML = '';
@@ -1078,6 +1078,16 @@ function updateGhost() {
 $inp.addEventListener('input', () => {
   updateGhost();
   updateMentionPicker();
+});
+
+// Ghost autocomplete: tap on completion text to accept
+$ghost.addEventListener('click', () => {
+  if ($ghost.dataset.full) {
+    $inp.value = $ghost.dataset.full;
+    $ghost.innerHTML = '';
+    $ghost.dataset.full = '';
+    $inp.focus();
+  }
 });
 
 // ── Mention picker ────────────────────────────────────────────────────────────
@@ -1995,7 +2005,7 @@ async function nuke() {
     localStorage.removeItem(K_FONT);
     localStorage.removeItem(K_WAKE);
     flushType();
-    $out.innerHTML = '';
+    $out.innerHTML = ''; $out.scrollTop = 0;
     ln(`  <span class="dm">All data wiped. Reloading...</span>`);
     setTimeout(() => location.reload(), 800);
     return true;
@@ -2030,7 +2040,7 @@ async function handleChat(text) {
     if (!ok) { mode = 'chat'; showHeader(); }
     return;
   }
-  if (s === '/clear')  { flushType(); $out.innerHTML = ''; return; }
+  if (s === '/clear')  { flushType(); $out.innerHTML = ''; $out.scrollTop = 0; return; }
   if (s === '/room')   { ln(`  Room: <span class="cy">?${esc(curRoom)}</span>`); return; }
   if (s === '/who')    { ln(`  Online (${users.size}): <span class="cy">${[...users].sort().map(esc).join(', ')}</span>`); return; }
   if (s === '/format') { fmtHelp(); return; }
@@ -2325,7 +2335,7 @@ async function main() {
 
   while (true) {
     flushType();
-    $out.innerHTML = '';
+    $out.innerHTML = ''; $out.scrollTop = 0;
     mode = 'setup';
     hideHeader();
     curPhrase = '';
@@ -2345,7 +2355,7 @@ async function main() {
         readme();
         await waitInput();
         flushType();
-        $out.innerHTML = '';
+        $out.innerHTML = ''; $out.scrollTop = 0;
         first = false;
         continue;
       }
@@ -2353,7 +2363,7 @@ async function main() {
       if (c === '/options') {
         await showOptions();
         flushType();
-        $out.innerHTML = '';
+        $out.innerHTML = ''; $out.scrollTop = 0;
         first = false;
         continue;
       }
